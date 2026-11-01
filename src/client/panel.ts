@@ -35,6 +35,8 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
   });
 
   let current: AbortController | null = null;
+  /** Runs replaced by a new message. They stop quietly, without a "已停止" note. */
+  const replaced = new WeakSet<AbortController>();
   let live: HTMLLIElement | null = null;
   let hideAt = 0;
 
@@ -42,7 +44,7 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
     const settings = readPilot();
     const ready = pilotReady(settings);
     model.textContent = ready ? settings.model : '';
-    goal.placeholder = ready ? '让它去做一件事' : '未填写模型，只能手工驾驶';
+    goal.placeholder = ready ? '让它去做一件事' : '未填写模型';
   };
 
   const touch = (): void => {
@@ -114,6 +116,7 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
         settings,
         signal: controller.signal,
         onEvent(event) {
+          if (controller.signal.aborted) return;
           switch (event.type) {
             case 'text':
               sawText = true;
@@ -130,11 +133,13 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
           }
         },
       });
-      if (controller.signal.aborted) show('已停止', 'note');
-      else if (!sawText && answer.trim()) show(answer.trim(), 'speech');
+      if (controller.signal.aborted) {
+        if (!replaced.has(controller)) show('已停止', 'note');
+      } else if (!sawText && answer.trim()) show(answer.trim(), 'speech');
     } catch (error) {
-      if (controller.signal.aborted || isAbort(error)) show('已停止', 'note');
-      else show(explain(error instanceof Error ? error.message : String(error)), 'note');
+      if (controller.signal.aborted || isAbort(error)) {
+        if (!replaced.has(controller)) show('已停止', 'note');
+      } else show(explain(error instanceof Error ? error.message : String(error)), 'note');
     } finally {
       if (current === controller) {
         current = null;
@@ -143,22 +148,30 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
     }
   };
 
+  // A click on 停止 aborts. Enter submits, and a typed message replaces the run.
+  // Keyboard activation of this button reports detail 0, so Enter still submits.
+  send.addEventListener('click', (event) => {
+    if (!current || event.detail === 0) return;
+    event.preventDefault();
+    current.abort();
+  });
+
   form.addEventListener('submit', (event) => {
     event.preventDefault();
+    const text = goal.value.trim();
     if (current) {
+      if (text) replaced.add(current);
       current.abort();
-      return;
+      if (!text) return;
     }
 
     const settings = readPilot();
     if (!pilotReady(settings)) {
-      show('还没有填写模型，现在只能手工驾驶', 'note');
+      show('还没有填写模型', 'note');
       fill(settings);
       dialog.showModal();
       return;
     }
-
-    const text = goal.value.trim();
     if (!text) return;
 
     const controller = new AbortController();

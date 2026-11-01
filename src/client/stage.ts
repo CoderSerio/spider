@@ -139,15 +139,19 @@ export class Stage {
 
     const alive = new Set<string>();
     const shown = world.entities.map((entity) => ({ entity, x: entity.x, y: entity.y, z: entity.z }));
-    if (world.carrying) {
-      const carried = world.carrying;
+    const back = world.carrying.length;
+    const yaw = this.#spider.yaw;
+    const fx = -Math.sin(yaw);
+    const fz = -Math.cos(yaw);
+    world.carrying.forEach((carried, index) => {
+      const along = (index - (back - 1) / 2) * 0.42;
       shown.push({
         entity: carried,
-        x: this.#spider.root.position.x,
-        y: this.#spider.root.position.y + 1.05,
-        z: this.#spider.root.position.z,
+        x: this.#spider.root.position.x - fx * along,
+        y: this.#spider.root.position.y + 0.95,
+        z: this.#spider.root.position.z - fz * along,
       });
-    }
+    });
     for (const { entity, x, y, z } of shown) {
       alive.add(entity.id);
       const previous = this.#stages.get(entity.id);

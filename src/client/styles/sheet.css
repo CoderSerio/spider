@@ -38,17 +38,6 @@ body {
   margin: 0;
 }
 
-#keys kbd {
-  display: inline-block;
-  min-width: 1.1em;
-  margin-right: 0.28em;
-  padding: 0 0.32em;
-  border: 1px solid #1b1714;
-  font: inherit;
-  line-height: 1.35;
-  text-align: center;
-}
-
 #corner button,
 #pilot,
 #trace,

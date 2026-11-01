@@ -8,6 +8,9 @@ export const PALETTE = {
 
 export const DECK_Y = 0.78;
 
+/** How many things can sit on the spider's back at once. */
+export const CARRY_LIMIT = 3;
+
 export interface MountSpec {
   readonly x: number;
   readonly y: number;
@@ -52,14 +55,14 @@ export const GAIT = {
   swing: 0.42,
   swingLift: 0.28,
   strideScale: 0.7,
-  freq: 1,
-  freqBoost: 1.65,
-  cruise: 1.7,
-  cruiseBoost: 3.4,
-  speedEase: 3.2,
-  yaw: 1.45,
-  yawBoost: 2.1,
-  yawAccel: 4,
+  freq: 1.5,
+  freqBoost: 2.5,
+  cruise: 2.55,
+  cruiseBoost: 5.1,
+  speedEase: 4.8,
+  yaw: 2.2,
+  yawBoost: 3.15,
+  yawAccel: 6,
   headYaw: 0.55,
   headEase: 8,
   pitch: 0.04,

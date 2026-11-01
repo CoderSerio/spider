@@ -1,5 +1,6 @@
 import type { Spider } from './Spider.js';
 import type { Controls } from '../../shared/types.js';
+import type { PlanPoint } from '../route.js';
 
 /**
  * A goal is a closed-loop controller: every fixed step it reads the body and
@@ -82,6 +83,69 @@ export function turnGoal(spider: Spider, degrees: number): Goal {
     },
     result() {
       return { target: degrees, achieved: turned() };
+    },
+  };
+}
+
+/** Meters still ahead of the current waypoint along the segment that reaches it. Negative once past. */
+function segmentLeft(points: readonly PlanPoint[], index: number, place: PlanPoint): number {
+  const point = points[Math.min(index, points.length - 1)];
+  const prev = points[Math.max(0, index - 1)];
+  const vx = point.x - prev.x;
+  const vz = point.z - prev.z;
+  const len = Math.hypot(vx, vz);
+  if (len < 1e-6) return 0;
+  const proj = ((place.x - prev.x) * vx + (place.z - prev.z) * vz) / len;
+  return len - proj;
+}
+
+/**
+ * Follow a path already planned around solids. This steers; it does not decide
+ * where to go. Positive turn is clockwise, matching turnGoal.
+ */
+export function routeGoal(spider: Spider, points: readonly PlanPoint[], fast = false): Goal {
+  let index = points.length > 1 ? 1 : 0;
+  const length = points.reduce((sum, point, i) => (i === 0 ? 0 : sum + Math.hypot(point.x - points[i - 1].x, point.z - points[i - 1].z)), 0);
+
+  const here = () => ({ x: spider.root.position.x, z: spider.root.position.z });
+  const waypoint = () => points[Math.min(index, points.length - 1)];
+  const remainingTo = (point: PlanPoint) => Math.hypot(point.x - here().x, point.z - here().z);
+
+  return {
+    timeout: Math.max(8, length / (fast ? 2.2 : 1) + 4),
+    controls() {
+      const point = waypoint();
+      const place = here();
+      const dx = point.x - place.x;
+      const dz = point.z - place.z;
+      const clockwise = wrapRadians(Math.atan2(dx, -dz) + spider.yaw);
+      const turn = clamp(-1.5 * (2.5 * -clockwise + spider.yawRate), -1, 1);
+      const aligned = Math.abs(clockwise) < 0.55;
+      const last = index >= points.length - 1;
+      const left = segmentLeft(points, index, place);
+      const distance = Math.hypot(dx, dz);
+      // Close enough, and slow. Cutting the throttle here and then turning
+      // back onto the point makes the last step pace past it.
+      if (last && left < 0.2 && distance < 0.45 && Math.abs(spider.speed) < 0.45) return { ...IDLE };
+      const along = last ? Math.max(0, left) : distance;
+      const throttle = aligned ? clamp(along / (fast ? 2.4 : 1.1), 0, 1) : 0;
+      return { ...IDLE, throttle, turn, boost: fast ? 1 : 0 };
+    },
+    done() {
+      if (spider.stuckFor >= STUCK_LIMIT) return true;
+      const point = waypoint();
+      const distance = remainingTo(point);
+      const last = index >= points.length - 1;
+      if (!last && distance < 0.3) {
+        index += 1;
+        return false;
+      }
+      const left = segmentLeft(points, index, here());
+      return last && distance < 0.45 && left < 0.2 && Math.abs(spider.speed) < 0.3 && Math.abs(spider.yawRate) < 0.2;
+    },
+    result() {
+      if (spider.stuckFor < STUCK_LIMIT) return {};
+      return { halt: spider.halt };
     },
   };
 }

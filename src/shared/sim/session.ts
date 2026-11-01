@@ -12,11 +12,24 @@ import type { Controls } from '../types.js';
 import { blockedAt, grassHere, insideHome, occluded } from '../sight.js';
 import { createWorld, GRASS_VIEW, REACH, REACH_Y, restingY, VIEW_DISTANCE } from '../world.js';
 import { TERRAIN } from '../terrain.js';
-import { heightGoal, STUCK_LIMIT, turnGoal, walkGoal, type Goal } from './goals.js';
+import { CARRY_LIMIT } from '../config.js';
+import { heightGoal, routeGoal, STUCK_LIMIT, turnGoal, walkGoal, type Goal } from './goals.js';
+import { planRoute } from '../route.js';
 import { Spider } from './Spider.js';
 
 const STEP = 1 / 60;
 const ZERO: Controls = { throttle: 0, turn: 0, lift: 0, boost: 0 };
+
+/** A sentence for a detour the body already took. Null when the straight walk was clear. */
+function detourNote(around: readonly string[], direct: boolean, arrived: boolean): string | null {
+  if (direct && around.length === 0) return null;
+  if (around.length > 0) {
+    const list = around.join('、');
+    return arrived ? `绕开了 ${list}，到了。` : `绕开了 ${list}，还是过不去。`;
+  }
+  if (direct) return null;
+  return arrived ? '绕开了陡坡，到了。' : '试了旁边的路，还是过不去。';
+}
 
 export interface GoalOutcome {
   ok: boolean;
@@ -45,7 +58,6 @@ export class SimSession {
     this.spider.bindBlocked((x, z) => blockedAt(x, z, this.world.blocks));
   }
 
-  #human: Controls = ZERO;
   #active: ActiveGoal | null = null;
   #last = performance.now();
   #acc = 0;
@@ -58,10 +70,6 @@ export class SimSession {
 
   stop(): void {
     if (this.#timer) clearInterval(this.#timer);
-  }
-
-  setHumanInput(input: Controls): void {
-    this.#human = input;
   }
 
   setPaused(paused: boolean): void {
@@ -170,45 +178,65 @@ export class SimSession {
     return this.drive(seconds, {});
   }
 
+  /**
+   * Go to a point. Solids and steep ground on the straight line are routed
+   * around here; the caller does not steer the detour.
+   */
   async moveTo(x: number, z: number, fast = false): Promise<GoalOutcome> {
-    const { x: x0, z: z0 } = this.spider.root.position;
-    const distance = Math.hypot(x - x0, z - z0);
-    const bearing = (Math.atan2(x - x0, -(z - z0)) * 180) / Math.PI;
-    const turn = await this.turn(wrapDegrees(bearing - toHeading(this.spider.yaw)));
-    if (!turn.ok) return { ...turn, ok: false, reason: `turn ${turn.reason}` };
-    const walk = await this.walk(distance, fast);
-    return { ...walk, distance };
+    const limit = TERRAIN.half - 1;
+    const blocks = this.world.blocks;
+    const height = (px: number, pz: number) => this.world.terrain.height(px, pz);
+    let direct = true;
+    const around: string[] = [];
+    let last: GoalOutcome = { ok: false, reason: 'no-path', detour: null };
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { x: x0, z: z0 } = this.spider.root.position;
+      if (Math.hypot(x - x0, z - z0) <= 0.28) {
+        return { ok: true, reason: 'reached', detour: detourNote(around, direct, true) };
+      }
+      const plan = planRoute(x0, z0, x, z, blocks, height, limit);
+      if (!plan) return { ok: false, reason: 'no-path', detour: detourNote(around, direct, false) };
+      direct = direct && plan.direct;
+      for (const id of plan.around) if (!around.includes(id)) around.push(id);
+      last = await this.run(routeGoal(this.spider, plan.points, fast));
+      if (last.reason === 'cancelled') return { ...last, detour: null };
+      if (last.ok) return { ok: true, reason: 'reached', detour: detourNote(around, direct, true) };
+      if (last.reason !== 'blocked' && last.reason !== 'steep') return { ...last, detour: null };
+    }
+    return { ok: false, reason: last.reason ?? 'blocked', detour: detourNote(around, direct, false) };
   }
 
-  /** Walk to within `standoff` of an entity, facing it. */
+  /** Walk to within `standoff` of an entity, facing it. Detours stay inside moveTo. */
   async approach(id: string, standoff = REACH - 0.3, fast = false): Promise<GoalOutcome> {
     const entity = this.world.entities.find((item) => item.id === id);
-    if (!entity) return { ok: false, reason: 'not-found', id };
+    if (!entity) return { ok: false, reason: 'not-found', id, detour: null };
 
     const { x, z } = this.spider.root.position;
-    const distance = Math.hypot(entity.x - x, entity.z - z) - standoff;
-    if (distance <= 0.05) return { ok: true, reason: 'already-close', id };
-
-    const bearing = (Math.atan2(entity.x - x, -(entity.z - z)) * 180) / Math.PI;
-    const turn = await this.turn(wrapDegrees(bearing - toHeading(this.spider.yaw)));
-    if (!turn.ok) return { ...turn, ok: false, reason: `turn ${turn.reason}` };
-    const walk = await this.walk(distance, fast);
-    return { ...walk, id, distance };
+    if (Math.hypot(entity.x - x, entity.z - z) > standoff + 0.05) {
+      const spot = this.#standOff(entity, standoff);
+      if (!spot) return { ok: false, reason: 'no-path', id, detour: null };
+      const moved = await this.moveTo(spot.x, spot.z, fast);
+      if (!moved.ok) return { ...moved, id };
+      const face = await this.#face(entity.x, entity.z);
+      if (!face.ok) return { ...face, id, detour: moved.detour ?? null };
+      return { ok: true, reason: 'reached', id, detour: moved.detour ?? null };
+    }
+    const face = await this.#face(entity.x, entity.z);
+    if (!face.ok) return { ...face, id, detour: null };
+    return { ok: true, reason: 'already-close', id, detour: null };
   }
 
-  /** Eat something edible that is in reach, or the thing you are holding. */
+  /** Eat something edible that is in reach, or one of the things on your back. */
   eat(id?: string): Promise<GoalOutcome> {
-    const held = this.world.carrying;
-    let entity =
-      id && held?.id === id
-        ? held
-        : this.#nearest(id, (item) => propertiesOf(item.kind).includes('edible'));
-    if (!entity && !id && held && propertiesOf(held.kind).includes('edible')) entity = held;
+    const held = id ? this.world.carrying.find((item) => item.id === id) : undefined;
+    let entity = held ?? this.#nearest(id, (item) => propertiesOf(item.kind).includes('edible'));
+    if (!entity && !id) entity = this.world.carrying.find((item) => propertiesOf(item.kind).includes('edible')) ?? null;
     if (!entity) return Promise.resolve({ ok: false, reason: id ? 'not-found' : 'nothing-to-eat', id });
     if (!propertiesOf(entity.kind).includes('edible')) {
       return Promise.resolve({ ok: false, reason: 'not-edible', id: entity.id });
     }
-    if (entity !== held) {
+    if (!this.world.carrying.includes(entity)) {
       const reach = this.#reachable(entity);
       if (!reach.ok) return Promise.resolve(reach);
     }
@@ -223,7 +251,7 @@ export class SimSession {
     const remaining = Math.max(0.05, meal.duration - elapsed0);
     const sync = (): number => {
       const now = elapsed0 + (this.spider.time - startedAt);
-      if (slices > 0 && (this.world.entities.includes(entity) || this.world.carrying === entity)) {
+      if (slices > 0 && (this.world.entities.includes(entity) || this.world.carrying.includes(entity))) {
         const visual = Math.min(meal.stages, Math.floor(now / (meal.duration / slices)));
         entity.stage = Math.max(entity.stage, visual);
       }
@@ -243,10 +271,10 @@ export class SimSession {
     });
   }
 
-  /** Pick up one carryable thing. You can hold only one. */
+  /** Pick up one carryable thing, until the back is full. */
   pickUp(id?: string): Promise<GoalOutcome> {
-    if (this.world.carrying) {
-      return Promise.resolve({ ok: false, reason: 'carrying', id: this.world.carrying.id });
+    if (this.world.carrying.length >= CARRY_LIMIT) {
+      return Promise.resolve({ ok: false, reason: 'full', carrying: this.world.carrying.map((item) => item.id) });
     }
     const entity = this.#nearest(id, (item) => propertiesOf(item.kind).includes('carryable'));
     if (!entity) return Promise.resolve({ ok: false, reason: id ? 'not-found' : 'nothing-to-carry', id });
@@ -266,31 +294,38 @@ export class SimSession {
       if (!outcome.ok) return outcome;
       if (!this.world.entities.includes(entity)) return { ok: false, reason: 'not-found', id: entity.id };
       this.#remove(entity);
-      this.world.carrying = entity;
-      return { ok: true, action: 'pick-up', target: entity.id, carrying: entity.id };
+      this.world.carrying.push(entity);
+      return { ok: true, action: 'pick-up', target: entity.id, carrying: this.world.carrying.map((item) => item.id) };
     });
   }
 
-  /** Put down what you are holding. Your grasp is free again. */
-  drop(): GoalOutcome {
-    const item = this.world.carrying;
-    if (!item) return { ok: false, reason: 'not-carrying' };
+  /** Put down one thing you are carrying. With no id, that is the last one you picked up. */
+  drop(id?: string): GoalOutcome {
+    const item = this.#carried(id);
+    if (!item) return { ok: false, reason: 'not-carrying', id };
     const spot = this.#spotAhead();
-    if (!spot) return { ok: false, reason: 'no-room' };
+    if (!spot) return { ok: false, reason: 'no-room', id: item.id };
     this.#putDown(item, spot.x, spot.z);
-    return { ok: true, action: 'drop', target: item.id, x: item.x, z: item.z };
+    return { ok: true, action: 'drop', target: item.id, x: item.x, z: item.z, carrying: this.world.carrying.map((held) => held.id) };
   }
 
-  /** Leave what you are holding inside the nest, and free your grasp. */
-  store(): GoalOutcome {
-    const item = this.world.carrying;
-    if (!item) return { ok: false, reason: 'not-carrying' };
+  /** Leave one carried thing inside the nest. With no id, that is the last one you picked up. */
+  store(id?: string): GoalOutcome {
+    const item = this.#carried(id);
+    if (!item) return { ok: false, reason: 'not-carrying', id };
     const { x, z } = this.spider.root.position;
     if (!insideHome(x, z)) return { ok: false, reason: 'not-home' };
     const spot = this.#stash();
     if (!spot) return { ok: false, reason: 'no-room' };
     this.#putDown(item, spot.x, spot.z);
-    return { ok: true, action: 'store', target: item.id, x: item.x, z: item.z };
+    return {
+      ok: true,
+      action: 'store',
+      target: item.id,
+      x: item.x,
+      z: item.z,
+      carrying: this.world.carrying.map((held) => held.id),
+    };
   }
 
   /** Sleep in the nest. You have to be home. */
@@ -315,9 +350,14 @@ export class SimSession {
 
   /** Drop a new prop into the world, sitting on the ground. */
   addEntity(kind: string, x: number, z: number): WorldState['entities'][number] {
-    const sameKind = this.world.entities.filter((item) => item.kind === kind).length;
+    const taken = [...this.world.entities, ...this.world.carrying].filter((item) => item.kind === kind);
+    const next =
+      taken.reduce((max, item) => {
+        const suffix = Number(item.id.slice(kind.length + 1));
+        return Number.isFinite(suffix) ? Math.max(max, suffix) : max;
+      }, 0) + 1;
     const entity = {
-      id: `${kind}-${sameKind + 1}`,
+      id: `${kind}-${next}`,
       kind,
       x,
       y: restingY(this.world.terrain, kind, x, z),
@@ -326,6 +366,42 @@ export class SimSession {
     };
     this.world.entities.push(entity);
     return entity;
+  }
+
+  #face(x: number, z: number): Promise<GoalOutcome> {
+    const bearing = (Math.atan2(x - this.spider.root.position.x, -(z - this.spider.root.position.z)) * 180) / Math.PI;
+    return this.turn(wrapDegrees(bearing - toHeading(this.spider.yaw)));
+  }
+
+  /** A free place at `standoff` from the entity, preferring the near side, that a route can reach. */
+  #standOff(entity: EntityState, standoff: number): { x: number; z: number } | null {
+    const sx = this.spider.root.position.x;
+    const sz = this.spider.root.position.z;
+    const blocks = this.world.blocks;
+    const limit = TERRAIN.half - 1;
+    const height = (px: number, pz: number) => this.world.terrain.height(px, pz);
+    const spots: { x: number; z: number; rank: number }[] = [];
+    const dx = entity.x - sx;
+    const dz = entity.z - sz;
+    const dist = Math.hypot(dx, dz);
+    if (dist > 1e-3) {
+      const travel = Math.max(0, dist - standoff);
+      const x = sx + (dx / dist) * travel;
+      const z = sz + (dz / dist) * travel;
+      if (!blockedAt(x, z, blocks)) spots.push({ x, z, rank: 0 });
+    }
+    for (let i = 0; i < 12; i++) {
+      const angle = (i / 12) * Math.PI * 2;
+      const x = entity.x + Math.cos(angle) * standoff;
+      const z = entity.z + Math.sin(angle) * standoff;
+      if (blockedAt(x, z, blocks)) continue;
+      spots.push({ x, z, rank: Math.hypot(x - sx, z - sz) });
+    }
+    spots.sort((a, b) => a.rank - b.rank);
+    for (const spot of spots) {
+      if (planRoute(sx, sz, spot.x, spot.z, blocks, height, limit)) return spot;
+    }
+    return null;
   }
 
   #nearest(id: string | undefined, want: (entity: EntityState) => boolean): EntityState | null {
@@ -351,34 +427,59 @@ export class SimSession {
     return { ok: true };
   }
 
+  /** The named thing on your back, or the last one picked up when id is omitted. */
+  #carried(id?: string): EntityState | null {
+    if (id) return this.world.carrying.find((item) => item.id === id) ?? null;
+    return this.world.carrying[this.world.carrying.length - 1] ?? null;
+  }
+
   #spotAhead(): { x: number; z: number } | null {
     const { x, z } = this.spider.root.position;
     const forward = { x: -Math.sin(this.spider.yaw), z: -Math.cos(this.spider.yaw) };
-    const ahead = { x: x + forward.x * 0.85, z: z + forward.z * 0.85 };
-    if (!blockedAt(ahead.x, ahead.z, this.world.blocks, 0.2)) return ahead;
-    if (!blockedAt(x, z, this.world.blocks, 0.2)) return { x, z };
-    return null;
+    const right = { x: -forward.z, z: forward.x };
+    const spots = [
+      { x: x + forward.x * 0.85, z: z + forward.z * 0.85 },
+      { x, z },
+    ];
+    for (let step = 1; step <= 3; step++) {
+      for (const side of [-1, 1]) {
+        spots.push({
+          x: x + forward.x * 0.85 + right.x * side * step * 0.45,
+          z: z + forward.z * 0.85 + right.z * side * step * 0.45,
+        });
+      }
+    }
+    return spots.find((spot) => this.#roomAt(spot.x, spot.z)) ?? null;
+  }
+
+  #roomAt(x: number, z: number): boolean {
+    if (blockedAt(x, z, this.world.blocks, 0.2)) return false;
+    return this.world.entities.every((item) => Math.hypot(item.x - x, item.z - z) > 0.4);
   }
 
   #stash(): { x: number; z: number } | null {
-    const used = this.world.entities.filter((item) => insideHome(item.x, item.z)).length;
-    const x = 1.15;
-    const z = 1.15 - used * 0.4;
-    if (!insideHome(x, z) || blockedAt(x, z, this.world.blocks, 0.2)) return null;
-    return { x, z };
+    for (let slot = 0; slot < 8; slot++) {
+      const x = 1.15;
+      const z = 1.15 - slot * 0.45;
+      if (!insideHome(x, z)) break;
+      if (this.#roomAt(x, z)) return { x, z };
+    }
+    return null;
   }
 
   #putDown(item: EntityState, x: number, z: number): void {
     item.x = x;
     item.z = z;
     item.y = restingY(this.world.terrain, item.kind, x, z, item.footprint);
-    this.world.carrying = null;
+    const carried = this.world.carrying.indexOf(item);
+    if (carried >= 0) this.world.carrying.splice(carried, 1);
     this.world.entities.push(item);
   }
 
   #remove(entity: EntityState): void {
-    if (this.world.carrying === entity) {
-      this.world.carrying = null;
+    const carried = this.world.carrying.indexOf(entity);
+    if (carried >= 0) {
+      this.world.carrying.splice(carried, 1);
       return;
     }
     const index = this.world.entities.indexOf(entity);
@@ -389,10 +490,7 @@ export class SimSession {
     if (this.paused) return;
 
     const active = this.#active;
-    // While a goal owns the body nothing else may steer it: a dropped keyup in
-    // the browser would otherwise hold the controls and starve the agent.
-    const input = active ? active.goal.controls() : this.#humanHeld() ? this.#human : ZERO;
-    this.spider.update(dt, input);
+    this.spider.update(dt, active ? active.goal.controls() : ZERO);
     if (!active) return;
 
     const reached = active.goal.done();
@@ -409,7 +507,4 @@ export class SimSession {
     });
   }
 
-  #humanHeld(): boolean {
-    return this.#human.throttle !== 0 || this.#human.turn !== 0 || this.#human.lift !== 0;
-  }
 }

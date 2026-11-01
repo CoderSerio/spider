@@ -57,8 +57,8 @@ export interface WorldState {
   terrain: { height(x: number, z: number): number };
   entities: EntityState[];
   blocks: Block[];
-  /** The one thing being carried. Null when the spider's grasp is free. */
-  carrying: EntityState | null;
+  /** What is on the spider's back, oldest first. Empty when it carries nothing. */
+  carrying: EntityState[];
 }
 
 export interface SeenEntity {
@@ -111,16 +111,14 @@ export interface Observation {
     cover: 'grass' | null;
     /** True while you are inside the nest. */
     home: boolean;
-    /** What you are holding, or null when your grasp is free. */
-    carrying: Carried | null;
+    /** What is on your back, oldest first. Empty when you carry nothing. */
+    carrying: Carried[];
     /** What your heading runs into within the next stretch. */
     ahead: Ahead;
     /** Solids within a few meters, nearest first. */
     nearby: NearbySolid[];
     /** Computed sentences: which relative turn is walkable, and for how far. */
     ways: string[];
-    /** Computed sentence about the nest mouth. Null when you are not by it. */
-    nearing: string | null;
     /** Indices of legs off the ground right now. */
     legsLifting: number[];
   };
@@ -201,13 +199,15 @@ export function toObservation(
       speed: Number(state.speed.toFixed(3)),
       cover: grassHere(px, pz, world.entities) ? 'grass' : null,
       home: insideHome(px, pz),
-      carrying: carrying
-        ? { id: carrying.id, kind: carrying.kind, stage: carrying.stage, properties: propertiesOf(carrying.kind) }
-        : null,
+      carrying: carrying.map((item) => ({
+        id: item.id,
+        kind: item.kind,
+        stage: item.stage,
+        properties: propertiesOf(item.kind),
+      })),
       ahead: felt.ahead,
       nearby: felt.nearby,
       ways: felt.ways,
-      nearing: felt.nearing,
       legsLifting: state.feet
         .map((foot, index) => (foot.y > world.terrain.height(foot.x, foot.z) + GROUND_LIFT ? index : -1))
         .filter((index) => index >= 0),

@@ -78,7 +78,7 @@ export function createWorld(seed = Math.floor(Math.random() * 1_000_000_000)): W
     ...buildings,
     ...scatter(rng, terrain, placed, blocks, 'apple', APPLES, 6),
   ];
-  return { seed: terrain.seed, terrain, entities, blocks, carrying: null };
+  return { seed: terrain.seed, terrain, entities, blocks, carrying: [] };
 }
 
 /** The nest is a low square of walls with a door on -Z, the way you face at birth. */

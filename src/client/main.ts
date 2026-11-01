@@ -1,5 +1,4 @@
 import './styles/sheet.css';
-import { Input } from './input.js';
 import { mountPanel } from './panel.js';
 import { Stage } from './stage.js';
 import { SimSession } from '../shared/sim/session.js';
@@ -16,11 +15,9 @@ stage.bind(
 );
 stage.start();
 
-const input = new Input(window, (controls) => session.setHumanInput(controls));
 mountPanel(document, session, stage);
 
 window.addEventListener('pagehide', () => {
   session.stop();
-  input.dispose();
   stage.dispose();
 });

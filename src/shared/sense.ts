@@ -1,5 +1,5 @@
 import { GAIT } from './config.js';
-import { blockAt, insideHome } from './sight.js';
+import { blockAt } from './sight.js';
 import type { Block } from './state.js';
 
 /** How far a look along the heading bothers to check. */
@@ -104,46 +104,10 @@ function waysFrom(x: number, z: number, heading: number, height: (x: number, z: 
   return [`周围都不远。${line(best)}`];
 }
 
-/** The nest mouth, from the two south wall blocks. Inside face, then outside face. */
-function nestMouth(blocks: readonly Block[]): { x: number; innerZ: number; outerZ: number } | null {
-  const south = blocks.filter((block) => block.id.startsWith('nest-s'));
-  if (south.length < 2) return null;
-  const west = Math.max(...south.map((block) => block.maxX).filter((edge) => edge < 0));
-  const east = Math.min(...south.map((block) => block.minX).filter((edge) => edge > 0));
-  if (!Number.isFinite(west) || !Number.isFinite(east)) return null;
-  return {
-    x: (west + east) / 2,
-    innerZ: Math.max(...south.map((block) => block.maxZ)),
-    outerZ: Math.min(...south.map((block) => block.minZ)),
-  };
-}
-
-function bearingTo(x: number, z: number, tx: number, tz: number, heading: number): number {
-  return wrap((Math.atan2(tx - x, -(tz - z)) * 180) / Math.PI - heading);
-}
-
-/** Where the nest mouth is, as a sentence, when you are in it or beside it. */
-function nearingMouth(x: number, z: number, heading: number, blocks: readonly Block[]): string | null {
-  const mouth = nestMouth(blocks);
-  if (!mouth) return null;
-  if (insideHome(x, z)) {
-    const distance = Math.hypot(x - mouth.x, z - mouth.innerZ);
-    const bearing = Math.round(bearingTo(x, z, mouth.x, mouth.innerZ, heading));
-    if (distance < 1.1 && Math.abs(bearing) < 35) return `你正在出巢，再向前约 ${meters(distance)} 米就到门外。`;
-    if (distance < 1.1) return `你就在巢的出口旁边，约 ${meters(distance)} 米，相对朝向 ${bearing} 度。转过去往前是出去。`;
-    return `你在巢里。出口约 ${meters(distance)} 米，相对朝向 ${bearing} 度（正数顺时针）。朝出口转，再往前就能出去。`;
-  }
-  const distance = Math.hypot(x - mouth.x, z - mouth.outerZ);
-  if (distance > 4) return null;
-  const bearing = Math.round(bearingTo(x, z, mouth.x, mouth.outerZ, heading));
-  if (distance < 1.2 && Math.abs(bearing) < 35) return `你正在进巢，再向前约 ${meters(distance)} 米就进门。`;
-  return `你在巢外，靠近入口。入口约 ${meters(distance)} 米，相对朝向 ${bearing} 度（正数顺时针）。`;
-}
-
 /**
- * What is in front of the body, which solids stand nearby, and the sentences
- * that say which way is walkable and whether the nest mouth is close.
- * Forward matches the spider: yaw 0 faces world -Z.
+ * What is in front of the body, which solids stand nearby, and which
+ * headings are walkable. The same probe covers every solid. Forward matches
+ * the spider: yaw 0 faces world -Z.
  */
 export function senseBody(
   x: number,
@@ -152,7 +116,7 @@ export function senseBody(
   heading: number,
   height: (x: number, z: number) => number,
   blocks: readonly Block[],
-): { ahead: Ahead; nearby: NearbySolid[]; ways: string[]; nearing: string | null } {
+): { ahead: Ahead; nearby: NearbySolid[]; ways: string[] } {
   const facing = probe(x, z, heading, height, blocks);
   let ahead: Ahead = facing;
   const here = blockAt(x, z, blocks);
@@ -174,8 +138,5 @@ export function senseBody(
   }
   nearby.sort((a, b) => a.distance - b.distance);
 
-  const nearing = nearingMouth(x, z, heading, blocks);
-  let ways = waysFrom(x, z, heading, height, blocks);
-  if (nearing?.includes('再向前')) ways = ways.filter((line) => line.startsWith('正前方'));
-  return { ahead, nearby: nearby.slice(0, 8), ways, nearing };
+  return { ahead, nearby: nearby.slice(0, 8), ways: waysFrom(x, z, heading, height, blocks) };
 }
