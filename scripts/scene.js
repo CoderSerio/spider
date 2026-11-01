@@ -72,7 +72,7 @@ export function mountScene(host) {
     }
     camera.position.copy(camPos);
     look.copy(walker.root.position);
-    look.y += 1.65;
+    look.y += 1.15;
     camera.lookAt(look);
   }
 
