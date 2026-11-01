@@ -210,7 +210,7 @@ function project(
   z: number,
   view: { width: number; height: number },
 ): { x: number; y: number } | null {
-  const point = _p.set(x, y, z).project(camera);
+  const point = projected.set(x, y, z).project(camera);
   if (point.z > 1) return null;
   return {
     x: (point.x * 0.5 + 0.5) * view.width,
@@ -218,4 +218,4 @@ function project(
   };
 }
 
-const _p = new Vector3();
+const projected = new Vector3();

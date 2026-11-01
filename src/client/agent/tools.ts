@@ -89,7 +89,7 @@ export function spiderTools(session: SimSession) {
         z: z.number().describe('目标的 z，单位。'),
         fast: z.boolean().optional().describe('走路这一段要不要跑。'),
       }),
-      execute: async ({ x, z, fast }) => finish(await session.moveTo(x, z, fast ?? false)),
+      execute: async ({ x, z: zPos, fast }) => finish(await session.moveTo(x, zPos, fast ?? false)),
     }),
     approach: tool({
       description:

@@ -199,6 +199,8 @@ export class SimSession {
       if (!plan) return { ok: false, reason: 'no-path', detour: detourNote(around, direct, false) };
       direct = direct && plan.direct;
       for (const id of plan.around) if (!around.includes(id)) around.push(id);
+      // Each attempt starts where the last one ended, so these stay sequential.
+      // eslint-disable-next-line no-await-in-loop
       last = await this.run(routeGoal(this.spider, plan.points, fast));
       if (last.reason === 'cancelled') return { ...last, detour: null };
       if (last.ok) return { ok: true, reason: 'reached', detour: detourNote(around, direct, true) };

@@ -78,6 +78,12 @@ function meters(value: number): string {
   return text.endsWith('.0') ? text.slice(0, -2) : text;
 }
 
+function lineOf(sample: { bearing: number; open: number }): string {
+  return Math.abs(sample.bearing) < 12
+    ? `正前方可以走 ${meters(sample.open)} 米。`
+    : `相对朝向转 ${Math.round(sample.bearing)} 度（正数顺时针）后，可以走 ${meters(sample.open)} 米。`;
+}
+
 /** Sentences the agent can follow: which way is walkable, and how far. */
 function waysFrom(
   x: number,
@@ -93,26 +99,22 @@ function waysFrom(
     samples.push({ bearing: wrap(absolute - heading), open: seen.open });
   }
   const forward = samples.reduce((a, b) => (Math.abs(a.bearing) < Math.abs(b.bearing) ? a : b));
-  const line = (sample: { bearing: number; open: number }) =>
-    Math.abs(sample.bearing) < 12
-      ? `正前方可以走 ${meters(sample.open)} 米。`
-      : `相对朝向转 ${Math.round(sample.bearing)} 度（正数顺时针）后，可以走 ${meters(sample.open)} 米。`;
   const alternatives = samples
     .filter(
       (sample) =>
         sample.open >= Math.max(2.5, forward.open + 1.5) && Math.abs(sample.bearing) >= 40,
     )
-    .sort((a, b) => b.open - a.open || Math.abs(a.bearing) - Math.abs(b.bearing));
+    .toSorted((a, b) => b.open - a.open || Math.abs(a.bearing) - Math.abs(b.bearing));
   const picked: { bearing: number; open: number }[] = [];
   for (const sample of alternatives) {
     if (picked.every((other) => Math.abs(wrap(sample.bearing - other.bearing)) >= 40))
       picked.push(sample);
     if (picked.length === 2) break;
   }
-  if (forward.open >= 2.5) return [line(forward), ...picked.map(line)];
-  if (picked.length > 0) return picked.map(line);
+  if (forward.open >= 2.5) return [lineOf(forward), ...picked.map(lineOf)];
+  if (picked.length > 0) return picked.map(lineOf);
   const best = samples.reduce((a, b) => (b.open > a.open ? b : a));
-  return [`周围都不远。${line(best)}`];
+  return [`周围都不远。${lineOf(best)}`];
 }
 
 /**

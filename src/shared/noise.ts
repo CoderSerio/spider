@@ -10,6 +10,23 @@ export function mulberry32(seed: number): () => number {
   };
 }
 
+function fade(t: number): number {
+  return t * t * t * (t * (t * 6 - 15) + 10);
+}
+
+function grad(hash: number, x: number, y: number): number {
+  switch (hash & 3) {
+    case 0:
+      return x + y;
+    case 1:
+      return -x + y;
+    case 2:
+      return x - y;
+    default:
+      return -x - y;
+  }
+}
+
 export function createNoise(seed: number): (x: number, y: number) => number {
   const rand = mulberry32(seed);
   const perm = new Uint8Array(512);
@@ -22,20 +39,6 @@ export function createNoise(seed: number): (x: number, y: number) => number {
     source[j] = swap;
   }
   for (let i = 0; i < 512; i++) perm[i] = source[i & 255];
-
-  const fade = (t: number) => t * t * t * (t * (t * 6 - 15) + 10);
-  const grad = (hash: number, x: number, y: number) => {
-    switch (hash & 3) {
-      case 0:
-        return x + y;
-      case 1:
-        return -x + y;
-      case 2:
-        return x - y;
-      default:
-        return -x - y;
-    }
-  };
 
   return (x, y) => {
     const x0 = Math.floor(x);
