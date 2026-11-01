@@ -7,11 +7,12 @@ import {
   type SpiderState,
   type WorldState,
 } from '../state.js';
-import { kindOf, slicesOf } from '../kinds.js';
+import { kindOf, propertiesOf, slicesOf } from '../kinds.js';
 import type { Controls } from '../types.js';
-import { createWorld, REACH, REACH_Y, VIEW_DISTANCE } from '../world.js';
+import { blockedAt, grassHere, insideHome, occluded } from '../sight.js';
+import { createWorld, GRASS_VIEW, REACH, REACH_Y, restingY, VIEW_DISTANCE } from '../world.js';
 import { TERRAIN } from '../terrain.js';
-import { heightGoal, turnGoal, walkGoal, type Goal } from './goals.js';
+import { heightGoal, STUCK_LIMIT, turnGoal, walkGoal, type Goal } from './goals.js';
 import { Spider } from './Spider.js';
 
 const STEP = 1 / 60;
@@ -41,6 +42,7 @@ export class SimSession {
   constructor(seed?: number) {
     this.world = createWorld(seed);
     this.spider.bindGround((x, z) => this.world.terrain.height(x, z), TERRAIN.half - 1);
+    this.spider.bindBlocked((x, z) => blockedAt(x, z, this.world.blocks));
   }
 
   #human: Controls = ZERO;
@@ -77,10 +79,15 @@ export class SimSession {
     return { state: this.spider.capture(), world: this.world };
   }
 
-  /** `all` includes every entity. A number is the look radius. The default is VIEW_DISTANCE. */
-  observe(distance: number | 'all' = VIEW_DISTANCE): Observation {
-    const within = distance === 'all' ? undefined : distance;
-    return toObservation(this.spider.capture(), this.world, REACH, within);
+  /**
+   * Look. The distance cannot exceed the default, and grass shortens it further.
+   * There is no way to see the whole island at once.
+   */
+  observe(distance = VIEW_DISTANCE): Observation {
+    const asked = Math.min(VIEW_DISTANCE, Math.max(0, distance));
+    const { x, z } = this.spider.root.position;
+    const view = grassHere(x, z, this.world.entities) ? Math.min(asked, GRASS_VIEW) : asked;
+    return toObservation(this.spider.capture(), this.world, REACH, view);
   }
 
   /** One visible frame. The page calls this from its render loop. */
@@ -150,11 +157,12 @@ export class SimSession {
       boost: input.boost ?? 0,
     };
     const startedAt = this.spider.time;
+    const held = () => Math.abs(controls.throttle) > 0.05 && this.spider.stuckFor >= STUCK_LIMIT;
     return this.run({
       timeout: seconds + 1,
       controls: () => controls,
-      done: () => this.spider.time - startedAt >= seconds,
-      result: () => ({ seconds }),
+      done: () => this.spider.time - startedAt >= seconds || held(),
+      result: () => (held() ? { seconds, halt: this.spider.halt } : { seconds }),
     });
   }
 
@@ -188,42 +196,35 @@ export class SimSession {
     return { ...walk, id, distance };
   }
 
-  /**
-   * Act on a nearby entity. The action takes the kind's duration.
-   * Finishing an apple removes it. Finishing a rest leaves the chair.
-   * Stopping early keeps the stage already reached.
-   */
-  interact(id?: string): Promise<GoalOutcome> {
-    const { x, y, z } = this.spider.root.position;
-    const candidates = this.world.entities.filter((item) => (id ? item.id === id : true));
-    if (candidates.length === 0) {
-      return Promise.resolve({ ok: false, reason: id ? 'not-found' : 'nothing-to-interact', id });
+  /** Eat something edible that is in reach, or the thing you are holding. */
+  eat(id?: string): Promise<GoalOutcome> {
+    const held = this.world.carrying;
+    let entity =
+      id && held?.id === id
+        ? held
+        : this.#nearest(id, (item) => propertiesOf(item.kind).includes('edible'));
+    if (!entity && !id && held && propertiesOf(held.kind).includes('edible')) entity = held;
+    if (!entity) return Promise.resolve({ ok: false, reason: id ? 'not-found' : 'nothing-to-eat', id });
+    if (!propertiesOf(entity.kind).includes('edible')) {
+      return Promise.resolve({ ok: false, reason: 'not-edible', id: entity.id });
+    }
+    if (entity !== held) {
+      const reach = this.#reachable(entity);
+      if (!reach.ok) return Promise.resolve(reach);
     }
 
-    const closest = candidates.reduce((best, item) =>
-      Math.hypot(item.x - x, item.z - z) < Math.hypot(best.x - x, best.z - z) ? item : best,
-    );
-    const distance = Math.hypot(closest.x - x, closest.z - z);
-    const vertical = Math.abs(closest.y - y);
-    if (distance > REACH || vertical > REACH_Y) {
-      return Promise.resolve({ ok: false, reason: 'out-of-reach', id: closest.id, distance });
-    }
+    const kind = kindOf(entity.kind);
+    const meal = kind?.eat;
+    if (!kind || !meal) return Promise.resolve({ ok: false, reason: 'not-edible', id: entity.id });
 
-    const kind = kindOf(closest.kind);
-    if (!kind) return Promise.resolve({ ok: false, reason: 'not-interactable', id: closest.id });
-
-    const entity = closest;
     const startedAt = this.spider.time;
-    const startStage = entity.stage;
     const slices = slicesOf(kind);
-    const elapsed0 = slices === 0 ? 0 : (startStage * kind.duration) / slices;
-    const remaining = Math.max(0.05, kind.duration - elapsed0);
-
-    const elapsed = () => elapsed0 + (this.spider.time - startedAt);
+    const elapsed0 = slices === 0 ? 0 : (entity.stage * meal.duration) / slices;
+    const remaining = Math.max(0.05, meal.duration - elapsed0);
     const sync = (): number => {
-      const now = elapsed();
-      if (slices > 0 && this.world.entities.includes(entity)) {
-        const visual = Math.min(kind.stages, Math.floor(now / (kind.duration / slices)));
+      const now = elapsed0 + (this.spider.time - startedAt);
+      if (slices > 0 && (this.world.entities.includes(entity) || this.world.carrying === entity)) {
+        const visual = Math.min(meal.stages, Math.floor(now / (meal.duration / slices)));
         entity.stage = Math.max(entity.stage, visual);
       }
       return now;
@@ -232,30 +233,94 @@ export class SimSession {
     return this.run({
       timeout: remaining + 1,
       controls: () => ZERO,
-      done: () => sync() >= kind.duration - 1e-4,
-      result: () => ({
-        action: kind.action,
-        target: entity.id,
-        stage: entity.stage,
-        removed: false,
-      }),
+      done: () => sync() >= meal.duration - 1e-4,
+      result: () => ({ action: 'eat', target: entity.id, stage: entity.stage, removed: false }),
     }).then((outcome) => {
-      if (!outcome.ok || !kind.removes) return { ...outcome, stage: entity.stage, removed: false };
+      if (!outcome.ok || !meal.removes) return { ...outcome, stage: entity.stage, removed: false };
       const stage = entity.stage;
       this.#remove(entity);
-      return { ...outcome, action: kind.action, target: entity.id, stage, removed: true };
+      return { ...outcome, action: 'eat', target: entity.id, stage, removed: true };
+    });
+  }
+
+  /** Pick up one carryable thing. You can hold only one. */
+  pickUp(id?: string): Promise<GoalOutcome> {
+    if (this.world.carrying) {
+      return Promise.resolve({ ok: false, reason: 'carrying', id: this.world.carrying.id });
+    }
+    const entity = this.#nearest(id, (item) => propertiesOf(item.kind).includes('carryable'));
+    if (!entity) return Promise.resolve({ ok: false, reason: id ? 'not-found' : 'nothing-to-carry', id });
+    if (!propertiesOf(entity.kind).includes('carryable')) {
+      return Promise.resolve({ ok: false, reason: 'not-carryable', id: entity.id });
+    }
+    const reach = this.#reachable(entity);
+    if (!reach.ok) return Promise.resolve(reach);
+
+    const startedAt = this.spider.time;
+    return this.run({
+      timeout: 2,
+      controls: () => ZERO,
+      done: () => this.spider.time - startedAt >= 0.7,
+      result: () => ({ action: 'pick-up', target: entity.id }),
+    }).then((outcome) => {
+      if (!outcome.ok) return outcome;
+      if (!this.world.entities.includes(entity)) return { ok: false, reason: 'not-found', id: entity.id };
+      this.#remove(entity);
+      this.world.carrying = entity;
+      return { ok: true, action: 'pick-up', target: entity.id, carrying: entity.id };
+    });
+  }
+
+  /** Put down what you are holding. Your grasp is free again. */
+  drop(): GoalOutcome {
+    const item = this.world.carrying;
+    if (!item) return { ok: false, reason: 'not-carrying' };
+    const spot = this.#spotAhead();
+    if (!spot) return { ok: false, reason: 'no-room' };
+    this.#putDown(item, spot.x, spot.z);
+    return { ok: true, action: 'drop', target: item.id, x: item.x, z: item.z };
+  }
+
+  /** Leave what you are holding inside the nest, and free your grasp. */
+  store(): GoalOutcome {
+    const item = this.world.carrying;
+    if (!item) return { ok: false, reason: 'not-carrying' };
+    const { x, z } = this.spider.root.position;
+    if (!insideHome(x, z)) return { ok: false, reason: 'not-home' };
+    const spot = this.#stash();
+    if (!spot) return { ok: false, reason: 'no-room' };
+    this.#putDown(item, spot.x, spot.z);
+    return { ok: true, action: 'store', target: item.id, x: item.x, z: item.z };
+  }
+
+  /** Sleep in the nest. You have to be home. */
+  sleep(): Promise<GoalOutcome> {
+    const { x, z } = this.spider.root.position;
+    if (!insideHome(x, z)) return Promise.resolve({ ok: false, reason: 'not-home' });
+    const duration = 4;
+    const startedAt = this.spider.time;
+    const woke = this.spider.heightSet;
+    return this.run({
+      timeout: duration + 2,
+      controls: () => {
+        const elapsed = this.spider.time - startedAt;
+        const target = elapsed < duration * 0.75 ? -0.28 : woke;
+        const lift = Math.abs(this.spider.heightSet - target) < 0.02 ? 0 : Math.sign(target - this.spider.heightSet);
+        return { ...ZERO, lift };
+      },
+      done: () => this.spider.time - startedAt >= duration && Math.abs(this.spider.heightSet - woke) < 0.05,
+      result: () => ({ action: 'sleep', home: true }),
     });
   }
 
   /** Drop a new prop into the world, sitting on the ground. */
   addEntity(kind: string, x: number, z: number): WorldState['entities'][number] {
-    const spec = kindOf(kind);
     const sameKind = this.world.entities.filter((item) => item.kind === kind).length;
     const entity = {
       id: `${kind}-${sameKind + 1}`,
       kind,
       x,
-      y: this.world.terrain.height(x, z) + (spec?.rest ?? 0),
+      y: restingY(this.world.terrain, kind, x, z),
       z,
       stage: 0,
     };
@@ -263,7 +328,59 @@ export class SimSession {
     return entity;
   }
 
+  #nearest(id: string | undefined, want: (entity: EntityState) => boolean): EntityState | null {
+    const { x, z } = this.spider.root.position;
+    const pool = this.world.entities.filter((item) => (id ? item.id === id : want(item)));
+    if (pool.length === 0) return null;
+    return pool.reduce((best, item) =>
+      Math.hypot(item.x - x, item.z - z) < Math.hypot(best.x - x, best.z - z) ? item : best,
+    );
+  }
+
+  #reachable(entity: EntityState): GoalOutcome {
+    const { x, y, z } = this.spider.root.position;
+    const distance = Math.hypot(entity.x - x, entity.z - z);
+    const vertical = Math.abs(entity.y - y);
+    if (distance > REACH || vertical > REACH_Y) {
+      return { ok: false, reason: 'out-of-reach', id: entity.id, distance };
+    }
+    const eye = this.world.terrain.height(x, z) + 0.85;
+    if (occluded(x, z, entity.x, entity.z, this.world.blocks, entity.id, eye)) {
+      return { ok: false, reason: 'blocked', id: entity.id };
+    }
+    return { ok: true };
+  }
+
+  #spotAhead(): { x: number; z: number } | null {
+    const { x, z } = this.spider.root.position;
+    const forward = { x: -Math.sin(this.spider.yaw), z: -Math.cos(this.spider.yaw) };
+    const ahead = { x: x + forward.x * 0.85, z: z + forward.z * 0.85 };
+    if (!blockedAt(ahead.x, ahead.z, this.world.blocks, 0.2)) return ahead;
+    if (!blockedAt(x, z, this.world.blocks, 0.2)) return { x, z };
+    return null;
+  }
+
+  #stash(): { x: number; z: number } | null {
+    const used = this.world.entities.filter((item) => insideHome(item.x, item.z)).length;
+    const x = 1.15;
+    const z = 1.15 - used * 0.4;
+    if (!insideHome(x, z) || blockedAt(x, z, this.world.blocks, 0.2)) return null;
+    return { x, z };
+  }
+
+  #putDown(item: EntityState, x: number, z: number): void {
+    item.x = x;
+    item.z = z;
+    item.y = restingY(this.world.terrain, item.kind, x, z, item.footprint);
+    this.world.carrying = null;
+    this.world.entities.push(item);
+  }
+
   #remove(entity: EntityState): void {
+    if (this.world.carrying === entity) {
+      this.world.carrying = null;
+      return;
+    }
     const index = this.world.entities.indexOf(entity);
     if (index >= 0) this.world.entities.splice(index, 1);
   }
@@ -282,10 +399,13 @@ export class SimSession {
     const overtime = this.spider.time - active.startedAt > active.goal.timeout;
     if (!reached && !overtime) return;
 
+    const detail = active.goal.result();
+    const halt = detail.halt;
+    const stopped = halt === 'solid' || halt === 'steep';
     active.finish({
-      ok: reached,
-      reason: reached ? 'reached' : 'timeout',
-      ...active.goal.result(),
+      ok: reached && !stopped,
+      reason: stopped ? (halt === 'steep' ? 'steep' : 'blocked') : reached ? 'reached' : 'timeout',
+      ...detail,
     });
   }
 

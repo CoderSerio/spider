@@ -12,12 +12,27 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
   const model = doc.querySelector<HTMLElement>('#pilot-model');
   const trace = doc.querySelector<HTMLOListElement>('#trace');
   const open = doc.querySelector<HTMLButtonElement>('#settings-open');
+  const map = doc.querySelector<HTMLButtonElement>('#map-open');
+  const lookHint = doc.querySelector<HTMLElement>('#look-hint');
   const dialog = doc.querySelector<HTMLDialogElement>('#settings');
   const settingsForm = doc.querySelector<HTMLFormElement>('#settings-form');
   const close = doc.querySelector<HTMLButtonElement>('#settings-close');
-  if (!form || !goal || !send || !model || !trace || !open || !dialog || !settingsForm || !close) {
+  if (!form || !goal || !send || !model || !trace || !open || !map || !dialog || !settingsForm || !close) {
     throw new Error('Missing pilot chrome');
   }
+
+  const showMap = (on: boolean): void => {
+    map.setAttribute('aria-pressed', on ? 'true' : 'false');
+    stage.setOverlook(on);
+    if (lookHint) lookHint.textContent = on ? '拖动平移　滚轮远近' : '拖动旋转视角　滚轮缩放';
+  };
+
+  showMap(location.hash === '#map');
+  map.addEventListener('click', () => {
+    const on = map.getAttribute('aria-pressed') !== 'true';
+    history.replaceState(null, '', on ? '#map' : location.pathname + location.search);
+    showMap(on);
+  });
 
   let current: AbortController | null = null;
   let live: HTMLLIElement | null = null;

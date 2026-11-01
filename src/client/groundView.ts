@@ -11,13 +11,12 @@ import { PALETTE } from '../shared/config.js';
 import { paperMat } from '../shared/sim/parts.js';
 import { TERRAIN } from '../shared/terrain.js';
 
-const SEGMENTS = 72;
 const LINE_STEP = 2;
 
 /** Paper island with ink grid lines draped over the same height function. */
 export function buildIsland(height: (x: number, z: number) => number): Group {
   const group = new Group();
-  const geo = groundGeometry(height, TERRAIN.half, SEGMENTS);
+  const geo = groundGeometry(height, TERRAIN.half, TERRAIN.segments);
   group.add(new Mesh(geo, paperMat));
 
   const ink = new LineBasicMaterial({ color: PALETTE.grid });

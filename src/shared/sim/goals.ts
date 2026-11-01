@@ -15,6 +15,9 @@ export interface Goal {
 
 const IDLE: Controls = { throttle: 0, turn: 0, lift: 0, boost: 0 };
 
+/** How long a step may push against a wall or a slope before the goal gives up. */
+export const STUCK_LIMIT = 0.35;
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -50,10 +53,13 @@ export function walkGoal(spider: Spider, distance: number, fast = false): Goal {
       return { ...IDLE, throttle, boost: fast ? 1 : 0 };
     },
     done() {
+      if (spider.stuckFor >= STUCK_LIMIT) return true;
       return target - progress() <= 0.05 && Math.abs(spider.speed) < 0.2;
     },
     result() {
-      return { target: distance, achieved: progress() * sign };
+      const achieved = progress() * sign;
+      if (spider.stuckFor < STUCK_LIMIT) return { target: distance, achieved };
+      return { target: distance, achieved, halt: spider.halt };
     },
   };
 }

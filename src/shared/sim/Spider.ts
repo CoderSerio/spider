@@ -53,10 +53,15 @@ export class Spider {
   time = 0;
   /** Downward speed while the body is above the ground. */
   fall = 0;
+  /** How long a commanded step has been held still by a solid or a slope. */
+  stuckFor = 0;
+  /** Why the last step failed to move. `clear` means it moved, or nothing was asked. */
+  halt: 'clear' | 'solid' | 'steep' = 'clear';
 
   #head!: Group;
   #seeded = false;
   #ground: (x: number, z: number) => number = () => 0;
+  #blocked: (x: number, z: number) => boolean = () => false;
   #limit = TERRAIN.half - 1;
   /** Stays on while the body is still turning or walking, so feet are not glued mid-settle. */
   #stepping = false;
@@ -79,6 +84,11 @@ export class Spider {
     this.update(0, IDLE);
   }
 
+  /** Solids you cannot walk through. */
+  bindBlocked(blocked: (x: number, z: number) => boolean): void {
+    this.#blocked = blocked;
+  }
+
   update(dt: number, input: Controls = IDLE): void {
     const throttle = input.throttle || 0;
     const turn = input.turn || 0;
@@ -96,7 +106,12 @@ export class Spider {
 
     this.time += dt;
     this.#steer(dt, turn, boost);
+    const beforeX = this.root.position.x;
+    const beforeZ = this.root.position.z;
     this.#drive(dt, throttle, boost);
+    const moved = Math.hypot(this.root.position.x - beforeX, this.root.position.z - beforeZ);
+    if (Math.abs(throttle) > 0.05 && this.halt !== 'clear' && moved < 1e-4) this.stuckFor += dt;
+    else this.stuckFor = 0;
 
     this.heightSet = MathUtils.clamp(
       this.heightSet + lift * GAIT.liftRate * dt,
@@ -201,6 +216,7 @@ export class Spider {
   }
 
   #drive(dt: number, throttle: number, boost: number): void {
+    this.halt = 'clear';
     const cruise = boost ? GAIT.cruiseBoost : GAIT.cruise;
     this.speed += (throttle * cruise - this.speed) * (1 - Math.exp(-GAIT.speedEase * dt));
     this.#readAxes();
@@ -215,10 +231,27 @@ export class Spider {
     const rise = this.#ground(nextX, nextZ) - this.#ground(x, z);
     if (rise > GAIT.maxSlope * run) {
       this.speed = 0;
+      this.halt = 'steep';
       return;
     }
-    this.root.position.x = nextX;
-    this.root.position.z = nextZ;
+    let moved = false;
+    if (!this.#blocked(nextX, nextZ)) {
+      this.root.position.x = nextX;
+      this.root.position.z = nextZ;
+      moved = true;
+    } else if (!this.#blocked(nextX, z) && Math.abs(nextX - x) > 1e-5) {
+      this.root.position.x = nextX;
+      moved = true;
+    } else if (!this.#blocked(x, nextZ) && Math.abs(nextZ - z) > 1e-5) {
+      this.root.position.z = nextZ;
+      moved = true;
+    }
+    // A free axis with a zero step is not progress. Head-on into a wall used to
+    // count that as a slide and keep the gait stepping until the goal timed out.
+    if (!moved) {
+      this.speed = 0;
+      this.halt = 'solid';
+    }
   }
 
   /** Ease onto the commanded deck height. A real drop falls. */

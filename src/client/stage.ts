@@ -10,10 +10,11 @@ import {
   WebGLRenderer,
 } from 'three';
 import { PALETTE } from '../shared/config.js';
+import { TERRAIN } from '../shared/terrain.js';
 import type { WorldState } from '../shared/state.js';
 import type { Spider } from '../shared/sim/Spider.js';
 import { buildIsland } from './groundView.js';
-import { buildProp } from './props.js';
+import { buildProp, drapeGrass } from './props.js';
 import { createSound } from './sound.js';
 
 // Camera framing. Drag orbits, wheel dollies; both clamp at the same limits.
@@ -64,6 +65,9 @@ export class Stage {
   #yaw: number = VIEW.yaw;
   #pitch: number = VIEW.pitch;
   #distance: number = VIEW.distance;
+  /** Overhead map. Drag pans, the wheel changes height. */
+  #overlook = false;
+  readonly #focus = new Vector3();
   #dragging = false;
   #pointerX = 0;
   #pointerY = 0;
@@ -108,6 +112,18 @@ export class Stage {
     this.#onAnchor = onAnchor;
   }
 
+  /** Switch between the chase camera and a free overhead map. */
+  setOverlook(on: boolean): void {
+    this.#overlook = on;
+    if (on) {
+      this.#focus.copy(this.#spider.root.position);
+      this.#distance = 34;
+    } else {
+      this.#distance = VIEW.distance;
+      this.#pitch = VIEW.pitch;
+    }
+  }
+
   start(): void {
     this.#last = performance.now();
     this.#renderer.setAnimationLoop(this.#frame);
@@ -122,7 +138,17 @@ export class Stage {
     }
 
     const alive = new Set<string>();
-    for (const entity of world.entities) {
+    const shown = world.entities.map((entity) => ({ entity, x: entity.x, y: entity.y, z: entity.z }));
+    if (world.carrying) {
+      const carried = world.carrying;
+      shown.push({
+        entity: carried,
+        x: this.#spider.root.position.x,
+        y: this.#spider.root.position.y + 1.05,
+        z: this.#spider.root.position.z,
+      });
+    }
+    for (const { entity, x, y, z } of shown) {
       alive.add(entity.id);
       const previous = this.#stages.get(entity.id);
       let prop = this.#props.get(entity.id);
@@ -133,14 +159,15 @@ export class Stage {
         if (previous != null && entity.stage > previous) this.#sound.bite();
       }
       if (!prop) {
-        const built = buildProp(entity.kind, entity.stage);
+        const built = buildProp(entity.kind, entity.stage, entity.footprint);
         if (!built) continue;
         prop = built;
         this.#props.set(entity.id, prop);
         this.#scene.add(prop);
       }
       this.#stages.set(entity.id, entity.stage);
-      prop.position.set(entity.x, entity.y, entity.z);
+      if (entity.kind === 'grass') drapeGrass(prop, x, z, (px, pz) => world.terrain.height(px, pz));
+      else prop.position.set(x, y, z);
     }
 
     for (const [id, prop] of this.#props) {
@@ -214,36 +241,46 @@ export class Stage {
 
   #onPointerMove = (event: PointerEvent): void => {
     if (!this.#dragging) return;
-    this.#yaw -= (event.clientX - this.#pointerX) * VIEW.dragYaw;
-    this.#pitch = MathUtils.clamp(
-      this.#pitch + (event.clientY - this.#pointerY) * VIEW.dragPitch,
-      VIEW.minPitch,
-      VIEW.maxPitch,
-    );
+    const dx = event.clientX - this.#pointerX;
+    const dy = event.clientY - this.#pointerY;
     this.#pointerX = event.clientX;
     this.#pointerY = event.clientY;
+    if (this.#overlook) {
+      const span = this.#distance * 0.0015;
+      this.#focus.x = MathUtils.clamp(this.#focus.x - dx * span, -TERRAIN.half, TERRAIN.half);
+      this.#focus.z = MathUtils.clamp(this.#focus.z + dy * span, -TERRAIN.half, TERRAIN.half);
+      return;
+    }
+    this.#yaw -= dx * VIEW.dragYaw;
+    this.#pitch = MathUtils.clamp(this.#pitch + dy * VIEW.dragPitch, VIEW.minPitch, VIEW.maxPitch);
   };
 
   #onWheel = (event: WheelEvent): void => {
-    this.#distance = MathUtils.clamp(
-      this.#distance * (1 + event.deltaY * VIEW.zoom),
-      VIEW.minDistance,
-      VIEW.maxDistance,
-    );
+    const min = this.#overlook ? 10 : VIEW.minDistance;
+    const max = this.#overlook ? 96 : VIEW.maxDistance;
+    this.#distance = MathUtils.clamp(this.#distance * (1 + event.deltaY * VIEW.zoom), min, max);
     event.preventDefault();
   };
 
   // Orbit angles are an offset in the character frame, then applied with the
   // same quaternion the body moves with. They are not a second heading.
   #placeCamera(dt: number): void {
-    const c = Math.cos(this.#pitch);
-    local.set(
-      Math.sin(this.#yaw) * c * this.#distance,
-      Math.sin(this.#pitch) * this.#distance,
-      Math.cos(this.#yaw) * c * this.#distance,
-    );
-    local.applyQuaternion(this.#spider.root.quaternion);
-    desired.copy(this.#spider.root.position).add(local);
+    if (this.#overlook) {
+      const height = this.#distance;
+      desired.set(this.#focus.x, height, this.#focus.z + height * 0.18);
+      look.set(this.#focus.x, 0, this.#focus.z);
+    } else {
+      const c = Math.cos(this.#pitch);
+      local.set(
+        Math.sin(this.#yaw) * c * this.#distance,
+        Math.sin(this.#pitch) * this.#distance,
+        Math.cos(this.#yaw) * c * this.#distance,
+      );
+      local.applyQuaternion(this.#spider.root.quaternion);
+      desired.copy(this.#spider.root.position).add(local);
+      look.copy(this.#spider.root.position);
+      look.y += VIEW.lookUp;
+    }
 
     if (!this.#camReady) {
       this.#camPos.copy(desired);
@@ -252,9 +289,6 @@ export class Stage {
       this.#camPos.lerp(desired, 1 - Math.exp(-VIEW.ease * Math.max(dt, 0.001)));
     }
     this.#camera.position.copy(this.#camPos);
-
-    look.copy(this.#spider.root.position);
-    look.y += VIEW.lookUp;
     this.#camera.lookAt(look);
   }
 

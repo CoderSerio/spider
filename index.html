@@ -13,10 +13,13 @@
     <p><kbd>W</kbd> 前进　<kbd>S</kbd> 后退　<kbd>Shift</kbd> 加速</p>
     <p><kbd>A</kbd> 头向左转　<kbd>D</kbd> 头向右转</p>
     <p><kbd>R</kbd> 升高　<kbd>F</kbd> 降低</p>
-    <p>拖动旋转视角　滚轮缩放</p>
+    <p id="look-hint">拖动旋转视角　滚轮缩放</p>
   </aside>
 
-  <button id="settings-open" type="button">设置</button>
+  <div id="corner">
+    <button id="map-open" type="button" aria-pressed="false">地图</button>
+    <button id="settings-open" type="button">设置</button>
+  </div>
   <ol id="trace" hidden></ol>
   <form id="pilot">
     <span id="pilot-model"></span>

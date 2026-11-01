@@ -1,3 +1,7 @@
+import { propertiesOf } from './kinds.js';
+import { senseBody, type Ahead, type NearbySolid } from './sense.js';
+import { grassHere, insideHome, occluded } from './sight.js';
+
 /** Serializable simulation state, world state, and the observation format. */
 
 export interface Vec3 {
@@ -21,52 +25,102 @@ export interface SpiderState {
   feet: Vec3[];
 }
 
+export type Footprint =
+  | { kind: 'circle'; r: number }
+  | { kind: 'box'; hx: number; hz: number };
+
 export interface EntityState {
   id: string;
   kind: string;
   x: number;
-  /** World height of the entity origin. An eaten apple is removed instead of kept here. */
+  /** World height of the origin. */
   y: number;
   z: number;
   /** How far an action has progressed. 0 is untouched. */
   stage: number;
+  /** Collision or cover size. Not reported in a look. */
+  footprint?: Footprint;
+}
+
+/** A solid the spider cannot enter, and cannot see through. */
+export interface Block {
+  id: string;
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  height: number;
 }
 
 export interface WorldState {
   seed: number;
   terrain: { height(x: number, z: number): number };
   entities: EntityState[];
+  blocks: Block[];
+  /** The one thing being carried. Null when the spider's grasp is free. */
+  carrying: EntityState | null;
 }
 
-export interface SeenEntity extends EntityState {
-  /** Units from the body. One unit is one grid cell. */
+export interface SeenEntity {
+  id: string;
+  kind: string;
+  x: number;
+  y: number;
+  z: number;
+  stage: number;
+  /** Qualities you can act on, such as edible or carryable. */
+  properties: string[];
+  /** Horizontal units from you. */
   distance: number;
-  /** Degrees relative to the body's heading, clockwise positive. */
+  /** Degrees relative to your heading, clockwise positive. */
   bearing: number;
-  /** Whether the body is close enough to act on it. */
+  /** Close enough to act on, and not behind a solid. */
   inReach: boolean;
+}
+
+export interface Carried {
+  id: string;
+  kind: string;
+  stage: number;
+  properties: string[];
 }
 
 export interface Observation {
   time: number;
   /** Rebuilds this same island. */
   seed: number;
-  /** Look radius in units. Null means every entity was included. */
-  range: number | null;
-  /** Entities left out because they sit beyond range. */
+  /** How far this look actually reached. */
+  view: number;
+  /** Left out because they sit past view. */
   beyond: number;
+  /** Within view, but a solid stands between you and them. */
+  hidden: number;
   self: {
     x: number;
-    /** World height of the body. */
+    /** Your height. */
     y: number;
     z: number;
-    /** Height of the ground under the body. */
+    /** Height of the ground under you. */
     ground: number;
     /** Degrees. 0 is world -Z, clockwise positive. */
     heading: number;
-    /** Deck offset above the local ground. */
+    /** How far you are lifted off the ground. */
     height: number;
     speed: number;
+    /** grass while you are standing in it. */
+    cover: 'grass' | null;
+    /** True while you are inside the nest. */
+    home: boolean;
+    /** What you are holding, or null when your grasp is free. */
+    carrying: Carried | null;
+    /** What your heading runs into within the next stretch. */
+    ahead: Ahead;
+    /** Solids within a few meters, nearest first. */
+    nearby: NearbySolid[];
+    /** Computed sentences: which relative turn is walkable, and for how far. */
+    ways: string[];
+    /** Computed sentence about the nest mouth. Null when you are not by it. */
+    nearing: string | null;
     /** Indices of legs off the ground right now. */
     legsLifting: number[];
   };
@@ -75,6 +129,8 @@ export interface Observation {
 
 /** A foot above this height is mid-swing rather than planted. */
 const GROUND_LIFT = 0.17;
+
+const REACH_Y = 1.6;
 
 /** Compass-style degrees from a three.js yaw. */
 export function toHeading(yaw: number): number {
@@ -90,43 +146,68 @@ export function toObservation(
   state: SpiderState,
   world: WorldState,
   reach: number,
-  within?: number,
+  view: number,
 ): Observation {
   const heading = toHeading(state.yaw);
   const seen: SeenEntity[] = [];
   let beyond = 0;
+  let hidden = 0;
+  const px = state.position.x;
+  const pz = state.position.z;
+  const ground = world.terrain.height(px, pz);
+  const eye = ground + 0.85;
   for (const entity of world.entities) {
-    const dx = entity.x - state.position.x;
-    const dz = entity.z - state.position.z;
+    const dx = entity.x - px;
+    const dz = entity.z - pz;
     const distance = Math.hypot(dx, dz);
-    if (within != null && distance > within) {
+    if (distance > view) {
       beyond += 1;
+      continue;
+    }
+    const behind = occluded(px, pz, entity.x, entity.z, world.blocks, entity.id, eye);
+    if (behind) {
+      hidden += 1;
       continue;
     }
     const vertical = Math.abs(entity.y - state.position.y);
     seen.push({
-      ...entity,
+      id: entity.id,
+      kind: entity.kind,
+      x: Number(entity.x.toFixed(3)),
       y: Number(entity.y.toFixed(3)),
+      z: Number(entity.z.toFixed(3)),
       stage: entity.stage,
+      properties: propertiesOf(entity.kind),
       distance: Number(distance.toFixed(3)),
       bearing: Number(wrapDegrees((Math.atan2(dx, -dz) * 180) / Math.PI - heading).toFixed(1)),
-      inReach: distance <= reach && vertical <= 1.6,
+      inReach: distance <= reach && vertical <= REACH_Y,
     });
   }
-  const ground = world.terrain.height(state.position.x, state.position.z);
+  const carrying = world.carrying;
+  const felt = senseBody(px, pz, state.yaw, heading, (x, z) => world.terrain.height(x, z), world.blocks);
   return {
     time: Number(state.time.toFixed(3)),
     seed: world.seed,
-    range: within ?? null,
+    view: Number(view.toFixed(3)),
     beyond,
+    hidden,
     self: {
-      x: Number(state.position.x.toFixed(3)),
+      x: Number(px.toFixed(3)),
       y: Number(state.position.y.toFixed(3)),
-      z: Number(state.position.z.toFixed(3)),
+      z: Number(pz.toFixed(3)),
       ground: Number(ground.toFixed(3)),
       heading: Number(heading.toFixed(1)),
       height: Number(state.height.toFixed(3)),
       speed: Number(state.speed.toFixed(3)),
+      cover: grassHere(px, pz, world.entities) ? 'grass' : null,
+      home: insideHome(px, pz),
+      carrying: carrying
+        ? { id: carrying.id, kind: carrying.kind, stage: carrying.stage, properties: propertiesOf(carrying.kind) }
+        : null,
+      ahead: felt.ahead,
+      nearby: felt.nearby,
+      ways: felt.ways,
+      nearing: felt.nearing,
       legsLifting: state.feet
         .map((foot, index) => (foot.y > world.terrain.height(foot.x, foot.z) + GROUND_LIFT ? index : -1))
         .filter((index) => index >= 0),

@@ -49,7 +49,7 @@ body {
   text-align: center;
 }
 
-#settings-open,
+#corner button,
 #pilot,
 #trace,
 #settings {
@@ -58,11 +58,18 @@ body {
   letter-spacing: 0.04em;
 }
 
-#settings-open {
+#corner {
   position: absolute;
   top: 18px;
   right: 22px;
   z-index: 3;
+  display: flex;
+  gap: 8px;
+}
+
+#map-open[aria-pressed='true'] {
+  background: #1b1714;
+  color: #f3efe6;
 }
 
 #trace {
@@ -135,7 +142,7 @@ body {
   padding: 0 0.5em;
 }
 
-#settings-open,
+#corner button,
 #pilot button,
 #pilot input,
 #settings input,
@@ -147,7 +154,7 @@ body {
   letter-spacing: inherit;
 }
 
-#settings-open,
+#corner button,
 #pilot button,
 #settings button {
   padding: 0 0.55em;
@@ -156,7 +163,7 @@ body {
 
 #pilot input:focus,
 #settings input:focus,
-#settings-open:focus,
+#corner button:focus,
 #pilot button:focus,
 #settings button:focus {
   outline: 1px solid #1b1714;
