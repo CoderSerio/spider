@@ -12,15 +12,16 @@ const HEIGHT_MAX = 0.95;
 // One flat deck. Six sockets sit on that plane, 60° apart, so the
 // tentacles leave in different directions instead of stacking.
 const DECK_Y = 1.16;
+// phase is the only gait state. Diagonals share a beat, so a foot cannot stick.
 const MOUNTS = [
-  { x: -0.39, y: DECK_Y, z: -0.68, side: -1, fore: 2.05, lateral: 1.18, pair: 0, reach: 2.45, flare: 0.12, lift: 1 },
-  { x: 0.39, y: DECK_Y, z: -0.68, side: 1, fore: 2.05, lateral: 1.18, pair: 1, reach: 2.45, flare: 0.12, lift: 1 },
-  { x: -0.39, y: DECK_Y, z: 0.68, side: -1, fore: -1.85, lateral: 1.08, pair: 1, reach: 2.35, flare: 0.12, lift: 1 },
-  { x: 0.39, y: DECK_Y, z: 0.68, side: 1, fore: -1.85, lateral: 1.08, pair: 0, reach: 2.35, flare: 0.12, lift: 1 },
-  { x: -0.78, y: DECK_Y, z: 0, side: -1, fore: 0.12, lateral: 2.35, pair: 2, reach: 2.3, flare: 0.16, lift: 1 },
-  { x: 0.78, y: DECK_Y, z: 0, side: 1, fore: -0.12, lateral: 2.35, pair: 2, reach: 2.3, flare: 0.16, lift: 1 },
+  { x: -0.39, y: DECK_Y, z: -0.68, side: -1, fore: 2.05, lateral: 1.18, phase: 0, reach: 2.45, flare: 0.12, lift: 1 },
+  { x: 0.39, y: DECK_Y, z: -0.68, side: 1, fore: 2.05, lateral: 1.18, phase: 0.66, reach: 2.45, flare: 0.12, lift: 1 },
+  { x: -0.39, y: DECK_Y, z: 0.68, side: -1, fore: -1.85, lateral: 1.08, phase: 0.66, reach: 2.35, flare: 0.12, lift: 1 },
+  { x: 0.39, y: DECK_Y, z: 0.68, side: 1, fore: -1.85, lateral: 1.08, phase: 0, reach: 2.35, flare: 0.12, lift: 1 },
+  { x: -0.78, y: DECK_Y, z: 0, side: -1, fore: 0.12, lateral: 2.35, phase: 0.33, reach: 2.3, flare: 0.16, lift: 1 },
+  { x: 0.78, y: DECK_Y, z: 0, side: 1, fore: -0.12, lateral: 2.35, phase: 0.33, reach: 2.3, flare: 0.16, lift: 1 },
 ];
-const STEP_ORDER = [0, 3, 4, 1, 2, 5];
+const SWING = 0.28;
 
 // Unit cylinder along local −Z, from z = 0 to z = −1. Thicker at the root.
 const tubeGeo = new THREE.CylinderGeometry(0.9, 1, 1, 8);
@@ -88,13 +89,7 @@ export function createWalker() {
     yaw: 0,
     yawRate: 0,
     headYaw: 0,
-    velocity: new THREE.Vector3(),
     heightSet: 0,
-    heightVel: 0,
-    leanPitch: 0,
-    leanRoll: 0,
-    stepLock: 0,
-    stepCursor: 0,
     time: 0,
     head: chassis.getObjectByName('head'),
     lens: chassis.getObjectByName('lens'),
@@ -115,34 +110,38 @@ function addSolid(parent, geo, ink, paper, x, y, z, rx = 0, ry = 0) {
 
 function buildBody(chassis, paper, ink) {
   const solid = (geo, x, y, z, rx = 0, ry = 0) => addSolid(chassis, geo, ink, paper, x, y, z, rx, ry);
+  const shell = (sx, sy, sz, x, y, z) => {
+    const geo = new THREE.SphereGeometry(1, 12, 8);
+    geo.scale(sx, sy, sz);
+    return solid(geo, x, y, z);
+  };
 
-  solid(new THREE.CylinderGeometry(0.3, 0.36, 0.08, 8), 0, 0.5, 0);
-  solid(new THREE.CylinderGeometry(0.14, 0.2, 0.48, 8), 0, 0.78, 0);
-  solid(new THREE.CylinderGeometry(0.98, 0.98, 0.06, 6), 0, DECK_Y, 0);
-  solid(new THREE.CylinderGeometry(0.86, 0.92, 0.045, 6), 0, DECK_Y - 0.055, 0);
-  solid(new THREE.TorusGeometry(0.96, 0.018, 4, 6), 0, DECK_Y + 0.02, 0, Math.PI / 2);
-  solid(new THREE.CylinderGeometry(0.1, 0.13, 0.1, 8), 0, DECK_Y + 0.1, -0.08);
+  // Cephalothorax in front, abdomen behind, legs stay on the front shell.
+  shell(0.92, 0.26, 0.7, 0, DECK_Y, -0.08);
+  solid(new THREE.BoxGeometry(0.55, 0.04, 0.9), 0, DECK_Y + 0.22, -0.1);
+  const waist = new THREE.CylinderGeometry(0.16, 0.18, 0.28, 8);
+  waist.rotateX(Math.PI / 2);
+  solid(waist, 0, DECK_Y + 0.02, 0.58);
+  shell(0.62, 0.42, 0.78, 0, DECK_Y + 0.1, 1.32);
 
   const head = new THREE.Group();
   head.name = 'head';
-  head.position.set(0, DECK_Y + 0.16, -0.1);
+  head.position.set(0, DECK_Y + 0.04, -0.7);
   chassis.add(head);
-  const hat = (geo, x, y, z, rx = 0) => addSolid(head, geo, ink, paper, x, y, z, rx, 0);
-  hat(new THREE.BoxGeometry(0.36, 0.3, 0.34), 0, 0.18, 0.02);
-  hat(new THREE.BoxGeometry(0.42, 0.1, 0.14), 0, 0.2, -0.14);
-  const lens = hat(new THREE.CylinderGeometry(0.08, 0.1, 0.12, 8), 0, 0.16, -0.26, Math.PI / 2);
+  const eye = (x, y, z, r) => {
+    const geo = new THREE.CylinderGeometry(r, r, 0.06, 8);
+    geo.rotateX(Math.PI / 2);
+    return addSolid(head, geo, ink, paper, x, y, z);
+  };
+  eye(-0.16, 0.06, 0, 0.045);
+  eye(0.16, 0.06, 0, 0.045);
+  eye(-0.08, -0.04, -0.02, 0.03);
+  const lens = eye(0.08, -0.04, -0.02, 0.03);
   lens.name = 'lens';
-  const pupil = new THREE.Mesh(
-    new THREE.CircleGeometry(0.045, 12),
-    new THREE.MeshBasicMaterial({ color: INK }),
-  );
-  pupil.position.set(0, 0.16, -0.33);
-  pupil.rotation.y = Math.PI;
-  head.add(pupil);
 
   const stern = new THREE.Object3D();
   stern.name = 'stern';
-  stern.position.set(0, DECK_Y, 0.72);
+  stern.position.set(0, DECK_Y + 0.1, 2.02);
   chassis.add(stern);
 
   for (let i = 0; i < MOUNTS.length; i++) {
@@ -248,11 +247,9 @@ function buildArm(rig, paper, ink, mount, index) {
     swingFrom: new THREE.Vector3(),
     swingTo: new THREE.Vector3(),
     foot: new THREE.Vector3(),
-    swinging: false,
-    swingT: 0,
-    swingDur: 0.34,
-    liftH: 0.7,
-    stanceTime: 1,
+    swingFrom: new THREE.Vector3(),
+    swingTo: new THREE.Vector3(),
+    lifted: false,
     points: Array.from({ length: 9 }, () => new THREE.Vector3()),
     samples: Array.from({ length: SEGMENTS + 1 }, () => new THREE.Vector3()),
     curve: null,
@@ -262,12 +259,7 @@ function buildArm(rig, paper, ink, mount, index) {
 const worldFwd = new THREE.Vector3();
 const worldRight = new THREE.Vector3();
 const supportW = new THREE.Vector3();
-const commandW = new THREE.Vector3();
 const offsetW = new THREE.Vector3();
-const leadW = new THREE.Vector3();
-const idealW = new THREE.Vector3();
-const accelW = new THREE.Vector3();
-const yawSpin = new THREE.Quaternion();
 const shoulderW = new THREE.Vector3();
 const sideW = new THREE.Vector3();
 const reachW = new THREE.Vector3();
@@ -279,10 +271,9 @@ const basisM = new THREE.Matrix4();
 
 export function stepWalker(walker, dt, control) {
   const throttle = control.throttle || 0;
-  const strafe = control.strafe || 0;
   const turn = control.turn || 0;
   const lift = control.lift || 0;
-  const pace = control.boost ? 4.05 : 2.35;
+  const boost = control.boost ? 1 : 0;
 
   walker.root.rotation.y = walker.yaw;
   walker.root.updateMatrixWorld(true);
@@ -296,196 +287,84 @@ export function stepWalker(walker, dt, control) {
   }
 
   walker.time += dt;
-  const yawTarget = turn * 1.65;
-  const yawStep = THREE.MathUtils.clamp(yawTarget - walker.yawRate, -6 * dt, 6 * dt);
-  walker.yawRate += yawStep;
-  const yawDelta = -walker.yawRate * dt;
+  const yawTarget = turn * (boost ? 2.1 : 1.5);
+  walker.yawRate += THREE.MathUtils.clamp(yawTarget - walker.yawRate, -6 * dt, 6 * dt);
   walker.yaw -= walker.yawRate * dt;
-  // Same delta that was applied to the cab, so momentum stays in the body frame.
-  yawSpin.setFromAxisAngle(UP, yawDelta);
-  walker.velocity.applyQuaternion(yawSpin);
   walker.root.rotation.y = walker.yaw;
-  const headTarget = -turn * 0.78;
-  const headBlend = 1 - Math.exp(-10 * dt);
-  walker.headYaw += (headTarget - walker.headYaw) * headBlend;
+  walker.headYaw += (-turn * 0.78 - walker.headYaw) * (1 - Math.exp(-10 * dt));
   walker.head.rotation.y = walker.headYaw;
 
   walker.heightSet = THREE.MathUtils.clamp(walker.heightSet + lift * 0.62 * dt, HEIGHT_MIN, HEIGHT_MAX);
-  walker.heightVel += ((walker.heightSet - walker.root.position.y) * 9 - walker.heightVel * 6) * dt;
-  walker.root.position.y += walker.heightVel * dt;
-  walker.root.position.x += walker.velocity.x * dt;
-  walker.root.position.z += walker.velocity.z * dt;
+  walker.root.position.y += (walker.heightSet - walker.root.position.y) * Math.min(1, 6 * dt);
+  walker.chassis.rotation.x = -throttle * 0.06;
+  walker.chassis.rotation.z = walker.yawRate * 0.05;
 
-  const along = walker.velocity.dot(worldFwd);
-  const across = walker.velocity.dot(worldRight);
-  const targetPitch = THREE.MathUtils.clamp(-throttle * 0.08 - along * 0.035, -0.14, 0.14);
-  const targetRoll = THREE.MathUtils.clamp(-strafe * 0.1 - across * 0.04 + walker.yawRate * 0.07, -0.16, 0.16);
-  const leanBlend = 1 - Math.exp(-5 * dt);
-  walker.leanPitch += (targetPitch - walker.leanPitch) * leanBlend;
-  walker.leanRoll += (targetRoll - walker.leanRoll) * leanBlend;
-  walker.chassis.rotation.x = walker.leanPitch;
-  walker.chassis.rotation.z = walker.leanRoll;
-  walker.chassis.position.y = Math.sin(walker.time * 1.5) * 0.01;
-
-  walker.root.updateMatrixWorld(true);
   worldFwd.set(0, 0, -1).applyQuaternion(walker.root.quaternion);
   worldRight.crossVectors(worldFwd, UP).normalize();
 
-  yawLead = walker.yawRate;
-  const speed = Math.hypot(walker.velocity.x, walker.velocity.z);
-  const reach = THREE.MathUtils.lerp(0.7, 0.36, THREE.MathUtils.clamp(speed / (1.5 * pace), 0, 1));
-  const busy = Math.abs(throttle) + Math.abs(strafe) + Math.abs(walker.yawRate);
-  let swinging = 0;
+  const moving = Math.abs(throttle) + Math.abs(turn) > 0.05;
+  const freq = moving ? (boost ? 2.5 : 1.7) : 0;
+  const stride = throttle * (boost ? 1.15 : 0.72);
   for (const arm of walker.arms) {
-    if (!arm.swinging) continue;
-    swinging += 1;
-    arm.swingT += dt / arm.swingDur;
-    const u = Math.min(1, arm.swingT);
-    const e = u * u * (3 - 2 * u);
-    const arc = Math.sin(Math.PI * u);
-    arm.foot.lerpVectors(arm.swingFrom, arm.swingTo, e);
-    arm.foot.y = FOOT_Y + arc * arm.liftH;
-    arm.foot.addScaledVector(worldRight, arm.mount.side * arc * 0.2);
-    if (u >= 1) {
-      arm.swinging = false;
+    const phase = freq === 0 ? 0.5 : (walker.time * freq + arm.mount.phase) % 1;
+    const swing = phase < SWING;
+    if (swing && !arm.lifted) {
+      arm.swingFrom.copy(arm.plant);
+      idealFoot(arm.swingTo, arm, worldFwd, worldRight, walker.root.position, stride);
+    }
+    if (swing) {
+      const u = phase / SWING;
+      const e = u * u * (3 - 2 * u);
+      arm.foot.lerpVectors(arm.swingFrom, arm.swingTo, e);
+      arm.foot.y = FOOT_Y + Math.sin(Math.PI * u) * 0.55;
+    } else if (arm.lifted) {
       arm.plant.copy(arm.swingTo);
       arm.foot.copy(arm.plant);
-      arm.stanceTime = 0;
-      walker.heightVel -= 0.45;
-      walker.leanPitch += 0.025;
-    }
-  }
-
-  walker.stepLock -= dt;
-  const trot = speed > 0.55;
-  const maxSwing = trot ? 2 : 1;
-  if (walker.stepLock <= 0 && swinging < maxSwing && busy > 0.2) {
-    const picked = nextFoot(walker, throttle, strafe, pace, reach);
-    if (picked) {
-      beginSwing(walker, picked, throttle, strafe, pace);
-      walker.stepCursor = (STEP_ORDER.indexOf(picked.index) + 1) % STEP_ORDER.length;
-      if (trot) {
-        const partner = diagonalPartner(walker, picked);
-        const partnerErr = partner ? footError(walker, partner, throttle, strafe, pace) : 0;
-        if (partner && !partner.swinging && !gaitConflict(walker, partner) && partnerErr > reach * 0.65) {
-          beginSwing(walker, partner, throttle, strafe, pace);
-        }
-      }
-      walker.stepLock = (trot ? 0.1 : 0.12) / pace;
-    }
-  }
-  for (const arm of walker.arms) {
-    if (!arm.swinging) {
-      arm.stanceTime += dt;
+    } else {
       arm.foot.copy(arm.plant);
     }
+    arm.lifted = swing;
   }
 
   let planted = 0;
   supportW.set(0, 0, 0);
   for (const arm of walker.arms) {
-    if (arm.swinging) continue;
+    if (arm.lifted) continue;
     offsetW.set(arm.mount.side * arm.mount.lateral, 0, -arm.mount.fore);
     offsetW.applyQuaternion(walker.root.quaternion);
     supportW.add(arm.plant).sub(offsetW);
     planted += 1;
   }
-  if (planted > 0) supportW.multiplyScalar(1 / planted);
-  else supportW.copy(walker.root.position);
-
-  commandW.copy(supportW);
-  commandW.addScaledVector(worldFwd, throttle * 0.66 * pace);
-  commandW.addScaledVector(worldRight, strafe * 0.55);
-  accelW.subVectors(commandW, walker.root.position);
-  accelW.y = 0;
-  accelW.multiplyScalar(7.4);
-  accelW.addScaledVector(walker.velocity, -4.2);
-  walker.velocity.addScaledVector(accelW, dt);
-  walker.velocity.y = 0;
-  const cap = 1.7 * pace;
-  const vlen = Math.hypot(walker.velocity.x, walker.velocity.z);
-  if (vlen > cap) walker.velocity.multiplyScalar(cap / vlen);
+  if (planted > 0) {
+    supportW.multiplyScalar(1 / planted);
+    const blend = Math.min(1, 8 * dt);
+    walker.root.position.x += (supportW.x - walker.root.position.x) * blend;
+    walker.root.position.z += (supportW.z - walker.root.position.z) * blend;
+  }
 
   poseAll(walker);
 }
 
 function seedFeet(walker) {
-  leadW.set(0, 0, 0);
   for (const arm of walker.arms) {
-    idealFoot(arm.plant, arm, worldFwd, worldRight, walker.root.position, leadW);
+    idealFoot(arm.plant, arm, worldFwd, worldRight, walker.root.position, 0);
     arm.foot.copy(arm.plant);
-    arm.swinging = false;
-    arm.stanceTime = 1;
+    arm.swingFrom.copy(arm.plant);
+    arm.swingTo.copy(arm.plant);
+    arm.lifted = false;
   }
   walker.seeded = true;
 }
 
-function gaitConflict(walker, arm) {
-  for (const other of walker.arms) {
-    if (!other.swinging || other.index === arm.index) continue;
-    if (other.mount.side === arm.mount.side) return true;
-    if (Math.sign(other.mount.fore) === Math.sign(arm.mount.fore)) return true;
-  }
-  return false;
-}
-
-function diagonalPartner(walker, arm) {
-  for (const other of walker.arms) {
-    if (other.mount.pair === arm.mount.pair && other.index !== arm.index) return other;
-  }
-  return null;
-}
-
-function nextFoot(walker, throttle, strafe, pace, reach) {
-  for (let n = 0; n < STEP_ORDER.length; n++) {
-    const arm = walker.arms[STEP_ORDER[(walker.stepCursor + n) % STEP_ORDER.length]];
-    if (arm.swinging || arm.stanceTime < 0.1 / Math.sqrt(pace)) continue;
-    if (gaitConflict(walker, arm)) continue;
-    const err = footError(walker, arm, throttle, strafe, pace);
-    const overdue = arm.stanceTime > 0.38 / pace && err > 0.18;
-    if (err > reach || overdue) return arm;
-  }
-  return null;
-}
-
-function footError(walker, arm, throttle, strafe, pace) {
-  fillLead(walker, throttle, strafe, pace);
-  idealFoot(idealW, arm, worldFwd, worldRight, walker.root.position, leadW);
-  const dx = arm.plant.x - idealW.x;
-  const dz = arm.plant.z - idealW.z;
-  return Math.hypot(dx, dz);
-}
-
-function beginSwing(walker, arm, throttle, strafe, pace) {
-  fillLead(walker, throttle, strafe, pace);
-  idealFoot(arm.swingTo, arm, worldFwd, worldRight, walker.root.position, leadW);
-  arm.swingFrom.copy(arm.plant);
-  const step = Math.hypot(arm.swingTo.x - arm.plant.x, arm.swingTo.z - arm.plant.z);
-  arm.liftH = THREE.MathUtils.clamp(0.42 + step * 0.28, 0.36, 1.2);
-  const hurry = pace > 2 ? 0.72 : 1;
-  arm.swingDur = THREE.MathUtils.clamp((0.16 + step * 0.05) * hurry, 0.12, 0.3);
-  arm.swingT = 0;
-  arm.swinging = true;
-}
-
-function fillLead(walker, throttle, strafe, pace) {
-  leadW.copy(walker.velocity).multiplyScalar(0.16);
-  leadW.addScaledVector(worldFwd, throttle * 0.52 * pace);
-  leadW.addScaledVector(worldRight, strafe * 0.4);
-}
-
-let yawLead = 0;
-
-function idealFoot(out, arm, fwd, right, origin, lead) {
+function idealFoot(out, arm, fwd, right, origin, stride) {
   out.copy(origin);
-  out.addScaledVector(fwd, arm.mount.fore + -arm.mount.side * yawLead * 0.55);
+  out.addScaledVector(fwd, arm.mount.fore + stride);
   out.addScaledVector(right, arm.mount.side * arm.mount.lateral);
-  out.add(lead);
   out.y = FOOT_Y;
 }
 
 function poseAll(walker) {
-  for (const arm of walker.arms) poseArm(walker, arm, !arm.swinging);
+  for (const arm of walker.arms) poseArm(walker, arm, !arm.lifted);
 }
 
 function poseArm(walker, arm, planted) {
@@ -518,8 +397,10 @@ function poseArm(walker, arm, planted) {
   }
   layoutArch(p, shoulderW, arm.foot, sideW, bow, arm.mount);
   arm.curve.updateArcLengths();
+  const span = arm.curve.getLength();
   for (let i = 0; i <= SEGMENTS; i++) {
-    arm.curve.getPointAt(i / SEGMENTS, arm.samples[i]);
+    if (span > 0.05) arm.curve.getPointAt(i / SEGMENTS, arm.samples[i]);
+    else arm.samples[i].lerpVectors(shoulderW, arm.foot, i / SEGMENTS);
   }
 
   // Seed the transport with the body's lateral axis so the ridge stays
