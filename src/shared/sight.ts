@@ -11,7 +11,12 @@ export function insideHome(x: number, z: number): boolean {
 }
 
 /** The solid whose footprint the body overlaps, if any. */
-export function blockAt(x: number, z: number, blocks: readonly Block[], radius = BODY_RADIUS): Block | null {
+export function blockAt(
+  x: number,
+  z: number,
+  blocks: readonly Block[],
+  radius = BODY_RADIUS,
+): Block | null {
   let nearest: Block | null = null;
   let nearestD = Infinity;
   for (const block of blocks) {
@@ -26,7 +31,12 @@ export function blockAt(x: number, z: number, blocks: readonly Block[], radius =
   return nearest;
 }
 
-export function blockedAt(x: number, z: number, blocks: readonly Block[], radius = BODY_RADIUS): boolean {
+export function blockedAt(
+  x: number,
+  z: number,
+  blocks: readonly Block[],
+  radius = BODY_RADIUS,
+): boolean {
   return blockAt(x, z, blocks, radius) !== null;
 }
 

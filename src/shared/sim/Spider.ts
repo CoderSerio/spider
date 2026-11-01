@@ -208,7 +208,11 @@ export class Spider {
 
   #steer(dt: number, turn: number, boost: number): void {
     const yawTarget = turn * (boost ? GAIT.yawBoost : GAIT.yaw);
-    this.yawRate += MathUtils.clamp(yawTarget - this.yawRate, -GAIT.yawAccel * dt, GAIT.yawAccel * dt);
+    this.yawRate += MathUtils.clamp(
+      yawTarget - this.yawRate,
+      -GAIT.yawAccel * dt,
+      GAIT.yawAccel * dt,
+    );
     this.yaw -= this.yawRate * dt;
     this.root.rotation.y = this.yaw;
     this.headYaw += (-turn * GAIT.headYaw - this.headYaw) * (1 - Math.exp(-GAIT.headEase * dt));
@@ -392,18 +396,32 @@ export class Spider {
 }
 
 /** Two-bone IK: the knee sits at len1 along the reach, lifted toward the pole. */
-function bendJoint(a: Vector3, b: Vector3, len1: number, len2: number, pole: Vector3, out: Vector3): void {
+function bendJoint(
+  a: Vector3,
+  b: Vector3,
+  len1: number,
+  len2: number,
+  pole: Vector3,
+  out: Vector3,
+): void {
   reachW.subVectors(b, a);
   const raw = reachW.length();
   const dist = MathUtils.clamp(raw, Math.abs(len1 - len2) + 0.04, len1 + len2 - 0.04);
   if (raw > 1e-5) reachW.multiplyScalar(1 / raw);
   else reachW.set(0, 0, -1);
-  const cosA = MathUtils.clamp((len1 * len1 + dist * dist - len2 * len2) / (2 * len1 * dist), -1, 1);
+  const cosA = MathUtils.clamp(
+    (len1 * len1 + dist * dist - len2 * len2) / (2 * len1 * dist),
+    -1,
+    1,
+  );
   const sinA = Math.sqrt(Math.max(0, 1 - cosA * cosA));
   axisX.copy(pole).addScaledVector(reachW, -pole.dot(reachW));
   if (axisX.lengthSq() < 1e-8) axisX.set(1, 0, 0);
   axisX.normalize();
-  out.copy(a).addScaledVector(reachW, cosA * len1).addScaledVector(axisX, sinA * len1);
+  out
+    .copy(a)
+    .addScaledVector(reachW, cosA * len1)
+    .addScaledVector(axisX, sinA * len1);
 }
 
 function placeBone(group: Group, a: Vector3, b: Vector3, radius: number, side: number): void {

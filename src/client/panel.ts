@@ -17,7 +17,18 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
   const dialog = doc.querySelector<HTMLDialogElement>('#settings');
   const settingsForm = doc.querySelector<HTMLFormElement>('#settings-form');
   const close = doc.querySelector<HTMLButtonElement>('#settings-close');
-  if (!form || !goal || !send || !model || !trace || !open || !map || !dialog || !settingsForm || !close) {
+  if (
+    !form ||
+    !goal ||
+    !send ||
+    !model ||
+    !trace ||
+    !open ||
+    !map ||
+    !dialog ||
+    !settingsForm ||
+    !close
+  ) {
     throw new Error('Missing pilot chrome');
   }
 
@@ -108,7 +119,11 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
   settingsForm.addEventListener('submit', persist);
   dialog.addEventListener('close', persist);
 
-  const run = async (controller: AbortController, text: string, settings: PilotSettings): Promise<void> => {
+  const run = async (
+    controller: AbortController,
+    text: string,
+    settings: PilotSettings,
+  ): Promise<void> => {
     let sawText = false;
     try {
       const { runAgent } = await import('./agent/loop.js');

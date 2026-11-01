@@ -144,7 +144,12 @@ export class Stage {
     }
 
     const alive = new Set<string>();
-    const shown = world.entities.map((entity) => ({ entity, x: entity.x, y: entity.y, z: entity.z }));
+    const shown = world.entities.map((entity) => ({
+      entity,
+      x: entity.x,
+      y: entity.y,
+      z: entity.z,
+    }));
     const carrying = new Set(world.carrying.map((item) => item.id));
     if (this.#carried) {
       for (const id of carrying) if (!this.#carried.has(id)) this.#sound.grasp();
@@ -375,5 +380,3 @@ export class Stage {
     };
   }
 }
-
-

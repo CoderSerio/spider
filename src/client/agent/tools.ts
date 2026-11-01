@@ -15,7 +15,9 @@ export interface ToolResult extends GoalOutcome {
 
 const thought = z
   .string()
-  .describe('一句第一人称的短话，用中文说你正在做什么。它出现在你旁边。说你要做的事，不要写坐标，也不要写行动的名字。');
+  .describe(
+    '一句第一人称的短话，用中文说你正在做什么。它出现在你旁边。说你要做的事，不要写坐标，也不要写行动的名字。',
+  );
 
 function call<T extends z.ZodRawShape>(shape: T) {
   return z.object({ description: thought, ...shape });
@@ -72,7 +74,8 @@ export function spiderTools(session: SimSession) {
       execute: async ({ degrees }) => finish(await session.turn(degrees)),
     }),
     turn_to: tool({
-      description: '转到一个绝对朝向。0 是世界的 -Z，顺时针为正，范围 -180 到 180。返回目标朝向和这次转过的度数。',
+      description:
+        '转到一个绝对朝向。0 是世界的 -Z，顺时针为正，范围 -180 到 180。返回目标朝向和这次转过的度数。',
       inputSchema: call({
         heading: z.number().min(-180).max(180).describe('绝对朝向，单位是度。'),
       }),
@@ -93,16 +96,24 @@ export function spiderTools(session: SimSession) {
         '走到一件东西够得着的地方，并面向它。中间的固体由这条路自己绕开。id 用最近一次观察里的。大约超过 2 个单位就设 fast。detour 的写法和 move_to 一样。找不到是 not-found，已经够近是 already-close，走不过去是 no-path。',
       inputSchema: call({
         id: z.string().describe('最近一次观察里的 id。'),
-        standoff: z.number().min(0).optional().describe(`停在离它多远的地方。默认 ${REACH - 0.3}。`),
+        standoff: z
+          .number()
+          .min(0)
+          .optional()
+          .describe(`停在离它多远的地方。默认 ${REACH - 0.3}。`),
         fast: z.boolean().optional().describe('离它大约超过 2 个单位时就跑。'),
       }),
-      execute: async ({ id, standoff, fast }) => finish(await session.approach(id, standoff, fast ?? false)),
+      execute: async ({ id, standoff, fast }) =>
+        finish(await session.approach(id, standoff, fast ?? false)),
     }),
     eat: tool({
       description:
         '吃一件 properties 里有 edible 的东西。它在够得着的地方，或者已经在你背上。吃要花时间，stage 会变。吃完它就没了，以后的观察里也不会再出现。中途停下的话，咬到哪算哪。',
       inputSchema: call({
-        id: z.string().optional().describe('观察里的 id，或背上某一件的 id。不填就吃够得着的、最近的能吃的，背上的也算。'),
+        id: z
+          .string()
+          .optional()
+          .describe('观察里的 id，或背上某一件的 id。不填就吃够得着的、最近的能吃的，背上的也算。'),
       }),
       execute: async ({ id }) => finish(await session.eat(id)),
     }),
@@ -114,14 +125,16 @@ export function spiderTools(session: SimSession) {
       execute: async ({ id }) => finish(await session.pickUp(id)),
     }),
     drop: tool({
-      description: '把背上的一件放在面前。不填 id 就放最后背上的那件。放下的那件不再在 carrying 里。',
+      description:
+        '把背上的一件放在面前。不填 id 就放最后背上的那件。放下的那件不再在 carrying 里。',
       inputSchema: call({
         id: z.string().optional().describe('背上某一件的 id。不填就放最后背上的那件。'),
       }),
       execute: async ({ id }) => finish(session.drop(id)),
     }),
     store: tool({
-      description: '把背上的一件留在巢里。你得在家里。不填 id 就留最后背上的那件。留下的那件不再在 carrying 里。',
+      description:
+        '把背上的一件留在巢里。你得在家里。不填 id 就留最后背上的那件。留下的那件不再在 carrying 里。',
       inputSchema: call({
         id: z.string().optional().describe('背上某一件的 id。不填就留最后背上的那件。'),
       }),
@@ -140,7 +153,8 @@ export function spiderTools(session: SimSession) {
       execute: async ({ level }) => finish(await session.setHeight(level)),
     }),
     drive: tool({
-      description: '朝一个方向撑一小会儿。只有别的行动都说不清你要做什么时才用。顶到固体上会提前停下，reason 是 blocked；坡太陡是 steep。返回秒数。',
+      description:
+        '朝一个方向撑一小会儿。只有别的行动都说不清你要做什么时才用。顶到固体上会提前停下，reason 是 blocked；坡太陡是 steep。返回秒数。',
       inputSchema: call({
         seconds: z.number().min(0).max(10).describe('撑多久，秒。'),
         throttle: z.number().min(-1).max(1).optional().describe('向前 1，向后 -1。默认 0。'),

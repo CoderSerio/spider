@@ -213,5 +213,3 @@ export function drapeGrass(
     blade.position.y = surfaceAt(height, wx, wz) + dip + 0.02;
   }
 }
-
-

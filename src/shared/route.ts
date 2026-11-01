@@ -55,7 +55,9 @@ export function planRoute(
   }
 
   const n = nodes.length;
-  const visible: boolean[][] = Array.from({ length: n }, () => Array.from({ length: n }, () => false));
+  const visible: boolean[][] = Array.from({ length: n }, () =>
+    Array.from({ length: n }, () => false),
+  );
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
       const clear = segmentClear(nodes[i], nodes[j], blocks, height, limit);
@@ -71,7 +73,12 @@ export function planRoute(
   const open: number[] = [0];
   const closed = new Set<number>();
   while (open.length > 0) {
-    open.sort((a, b) => gScore[a] + span(nodes[a], nodes[goalIndex]) - (gScore[b] + span(nodes[b], nodes[goalIndex])));
+    open.sort(
+      (a, b) =>
+        gScore[a] +
+        span(nodes[a], nodes[goalIndex]) -
+        (gScore[b] + span(nodes[b], nodes[goalIndex])),
+    );
     const current = open.shift();
     if (current === undefined || closed.has(current)) continue;
     if (current === goalIndex) break;
@@ -90,11 +97,17 @@ export function planRoute(
   const points: PlanPoint[] = [];
   for (let at = goalIndex; at >= 0; at = came[at]) points.push(nodes[at]);
   points.reverse();
-  return { points: pull(points, blocks, height, limit), around: blocksBetween(start, goal, blocks), direct: false };
+  return {
+    points: pull(points, blocks, height, limit),
+    around: blocksBetween(start, goal, blocks),
+    direct: false,
+  };
 }
 
 function standable(point: PlanPoint, blocks: readonly Block[], limit: number): boolean {
-  return Math.abs(point.x) <= limit && Math.abs(point.z) <= limit && !blockedAt(point.x, point.z, blocks);
+  return (
+    Math.abs(point.x) <= limit && Math.abs(point.z) <= limit && !blockedAt(point.x, point.z, blocks)
+  );
 }
 
 function span(a: PlanPoint, b: PlanPoint): number {

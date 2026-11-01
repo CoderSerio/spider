@@ -204,7 +204,11 @@ export class SimSession {
       if (last.ok) return { ok: true, reason: 'reached', detour: detourNote(around, direct, true) };
       if (last.reason !== 'blocked' && last.reason !== 'steep') return { ...last, detour: null };
     }
-    return { ok: false, reason: last.reason ?? 'blocked', detour: detourNote(around, direct, false) };
+    return {
+      ok: false,
+      reason: last.reason ?? 'blocked',
+      detour: detourNote(around, direct, false),
+    };
   }
 
   /** Walk to within `standoff` of an entity, facing it. Detours stay inside moveTo. */
@@ -231,8 +235,11 @@ export class SimSession {
   eat(id?: string): Promise<GoalOutcome> {
     const held = id ? this.world.carrying.find((item) => item.id === id) : undefined;
     let entity = held ?? this.#nearest(id, (item) => propertiesOf(item.kind).includes('edible'));
-    if (!entity && !id) entity = this.world.carrying.find((item) => propertiesOf(item.kind).includes('edible')) ?? null;
-    if (!entity) return Promise.resolve({ ok: false, reason: id ? 'not-found' : 'nothing-to-eat', id });
+    if (!entity && !id)
+      entity =
+        this.world.carrying.find((item) => propertiesOf(item.kind).includes('edible')) ?? null;
+    if (!entity)
+      return Promise.resolve({ ok: false, reason: id ? 'not-found' : 'nothing-to-eat', id });
     if (!propertiesOf(entity.kind).includes('edible')) {
       return Promise.resolve({ ok: false, reason: 'not-edible', id: entity.id });
     }
@@ -251,7 +258,10 @@ export class SimSession {
     const remaining = Math.max(0.05, meal.duration - elapsed0);
     const sync = (): number => {
       const now = elapsed0 + (this.spider.time - startedAt);
-      if (slices > 0 && (this.world.entities.includes(entity) || this.world.carrying.includes(entity))) {
+      if (
+        slices > 0 &&
+        (this.world.entities.includes(entity) || this.world.carrying.includes(entity))
+      ) {
         const visual = Math.min(meal.stages, Math.floor(now / (meal.duration / slices)));
         entity.stage = Math.max(entity.stage, visual);
       }
@@ -274,10 +284,15 @@ export class SimSession {
   /** Pick up one carryable thing, until the back is full. */
   pickUp(id?: string): Promise<GoalOutcome> {
     if (this.world.carrying.length >= CARRY_LIMIT) {
-      return Promise.resolve({ ok: false, reason: 'full', carrying: this.world.carrying.map((item) => item.id) });
+      return Promise.resolve({
+        ok: false,
+        reason: 'full',
+        carrying: this.world.carrying.map((item) => item.id),
+      });
     }
     const entity = this.#nearest(id, (item) => propertiesOf(item.kind).includes('carryable'));
-    if (!entity) return Promise.resolve({ ok: false, reason: id ? 'not-found' : 'nothing-to-carry', id });
+    if (!entity)
+      return Promise.resolve({ ok: false, reason: id ? 'not-found' : 'nothing-to-carry', id });
     if (!propertiesOf(entity.kind).includes('carryable')) {
       return Promise.resolve({ ok: false, reason: 'not-carryable', id: entity.id });
     }
@@ -292,10 +307,16 @@ export class SimSession {
       result: () => ({ action: 'pick-up', target: entity.id }),
     }).then((outcome) => {
       if (!outcome.ok) return outcome;
-      if (!this.world.entities.includes(entity)) return { ok: false, reason: 'not-found', id: entity.id };
+      if (!this.world.entities.includes(entity))
+        return { ok: false, reason: 'not-found', id: entity.id };
       this.#remove(entity);
       this.world.carrying.push(entity);
-      return { ok: true, action: 'pick-up', target: entity.id, carrying: this.world.carrying.map((item) => item.id) };
+      return {
+        ok: true,
+        action: 'pick-up',
+        target: entity.id,
+        carrying: this.world.carrying.map((item) => item.id),
+      };
     });
   }
 
@@ -306,7 +327,14 @@ export class SimSession {
     const spot = this.#spotAhead();
     if (!spot) return { ok: false, reason: 'no-room', id: item.id };
     this.#putDown(item, spot.x, spot.z);
-    return { ok: true, action: 'drop', target: item.id, x: item.x, z: item.z, carrying: this.world.carrying.map((held) => held.id) };
+    return {
+      ok: true,
+      action: 'drop',
+      target: item.id,
+      x: item.x,
+      z: item.z,
+      carrying: this.world.carrying.map((held) => held.id),
+    };
   }
 
   /** Leave one carried thing inside the nest. With no id, that is the last one you picked up. */
@@ -340,17 +368,23 @@ export class SimSession {
       controls: () => {
         const elapsed = this.spider.time - startedAt;
         const target = elapsed < duration * 0.75 ? -0.28 : woke;
-        const lift = Math.abs(this.spider.heightSet - target) < 0.02 ? 0 : Math.sign(target - this.spider.heightSet);
+        const lift =
+          Math.abs(this.spider.heightSet - target) < 0.02
+            ? 0
+            : Math.sign(target - this.spider.heightSet);
         return { ...ZERO, lift };
       },
-      done: () => this.spider.time - startedAt >= duration && Math.abs(this.spider.heightSet - woke) < 0.05,
+      done: () =>
+        this.spider.time - startedAt >= duration && Math.abs(this.spider.heightSet - woke) < 0.05,
       result: () => ({ action: 'sleep', home: true }),
     });
   }
 
   /** Drop a new prop into the world, sitting on the ground. */
   addEntity(kind: string, x: number, z: number): WorldState['entities'][number] {
-    const taken = [...this.world.entities, ...this.world.carrying].filter((item) => item.kind === kind);
+    const taken = [...this.world.entities, ...this.world.carrying].filter(
+      (item) => item.kind === kind,
+    );
     const next =
       taken.reduce((max, item) => {
         const suffix = Number(item.id.slice(kind.length + 1));
@@ -369,7 +403,9 @@ export class SimSession {
   }
 
   #face(x: number, z: number): Promise<GoalOutcome> {
-    const bearing = (Math.atan2(x - this.spider.root.position.x, -(z - this.spider.root.position.z)) * 180) / Math.PI;
+    const bearing =
+      (Math.atan2(x - this.spider.root.position.x, -(z - this.spider.root.position.z)) * 180) /
+      Math.PI;
     return this.turn(wrapDegrees(bearing - toHeading(this.spider.yaw)));
   }
 
@@ -506,5 +542,4 @@ export class SimSession {
       ...detail,
     });
   }
-
 }

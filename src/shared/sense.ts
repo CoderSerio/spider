@@ -61,14 +61,15 @@ function probe(
     const ground = height(nx, nz);
     const hit = blockAt(nx, nz, blocks);
     if (hit) return { open: round(traveled), by: 'wall', id: hit.id, kind: kindOfBlock(hit.id) };
-    if (ground - previous > GAIT.maxSlope * STEP) return { open: round(traveled), by: 'slope', id: null, kind: null };
+    if (ground - previous > GAIT.maxSlope * STEP)
+      return { open: round(traveled), by: 'slope', id: null, kind: null };
     previous = ground;
   }
   return { open: AHEAD, by: 'clear', id: null, kind: null };
 }
 
 function wrap(degrees: number): number {
-  const wrapped = (((degrees + 180) % 360) + 360) % 360 - 180;
+  const wrapped = ((((degrees + 180) % 360) + 360) % 360) - 180;
   return wrapped === -180 ? 180 : wrapped;
 }
 
@@ -78,7 +79,13 @@ function meters(value: number): string {
 }
 
 /** Sentences the agent can follow: which way is walkable, and how far. */
-function waysFrom(x: number, z: number, heading: number, height: (x: number, z: number) => number, blocks: readonly Block[]): string[] {
+function waysFrom(
+  x: number,
+  z: number,
+  heading: number,
+  height: (x: number, z: number) => number,
+  blocks: readonly Block[],
+): string[] {
   const samples = [];
   for (let step = 0; step < 24; step++) {
     const absolute = step * 15;
@@ -91,11 +98,15 @@ function waysFrom(x: number, z: number, heading: number, height: (x: number, z: 
       ? `正前方可以走 ${meters(sample.open)} 米。`
       : `相对朝向转 ${Math.round(sample.bearing)} 度（正数顺时针）后，可以走 ${meters(sample.open)} 米。`;
   const alternatives = samples
-    .filter((sample) => sample.open >= Math.max(2.5, forward.open + 1.5) && Math.abs(sample.bearing) >= 40)
+    .filter(
+      (sample) =>
+        sample.open >= Math.max(2.5, forward.open + 1.5) && Math.abs(sample.bearing) >= 40,
+    )
     .sort((a, b) => b.open - a.open || Math.abs(a.bearing) - Math.abs(b.bearing));
   const picked: { bearing: number; open: number }[] = [];
   for (const sample of alternatives) {
-    if (picked.every((other) => Math.abs(wrap(sample.bearing - other.bearing)) >= 40)) picked.push(sample);
+    if (picked.every((other) => Math.abs(wrap(sample.bearing - other.bearing)) >= 40))
+      picked.push(sample);
     if (picked.length === 2) break;
   }
   if (forward.open >= 2.5) return [line(forward), ...picked.map(line)];

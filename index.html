@@ -1,49 +1,67 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>机械蛛 · 结构</title>
-</head>
-<body>
-<main id="sheet">
-  <div id="stage"></div>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>机械蛛 · 结构</title>
+  </head>
+  <body>
+    <main id="sheet">
+      <div id="stage"></div>
 
-  <aside id="keys">
-    <p id="look-hint">拖动旋转视角　滚轮缩放</p>
-  </aside>
+      <aside id="keys">
+        <p id="look-hint">拖动旋转视角　滚轮缩放</p>
+      </aside>
 
-  <div id="corner">
-    <button id="observe-open" type="button" aria-pressed="false">观察</button>
-    <button id="settings-open" type="button">设置</button>
-  </div>
-  <ol id="trace" hidden></ol>
-  <form id="pilot">
-    <span id="pilot-model"></span>
-    <input id="goal" name="goal" type="text" autocomplete="off" placeholder="未填写模型" />
-    <button id="pilot-send" type="submit">发送</button>
-  </form>
+      <div id="corner">
+        <button id="observe-open" type="button" aria-pressed="false">观察</button>
+        <button id="settings-open" type="button">设置</button>
+      </div>
+      <ol id="trace" hidden></ol>
+      <form id="pilot">
+        <span id="pilot-model"></span>
+        <input id="goal" name="goal" type="text" autocomplete="off" placeholder="未填写模型" />
+        <button id="pilot-send" type="submit">发送</button>
+      </form>
 
-  <dialog id="settings">
-    <form id="settings-form" method="dialog">
-      <h2>模型</h2>
-      <label>Base URL
-        <input name="baseURL" type="url" autocomplete="off" spellcheck="false" placeholder="https://api.deepseek.com/v1" />
-      </label>
-      <label>Model ID
-        <input name="model" type="text" autocomplete="off" spellcheck="false" placeholder="deepseek-chat" />
-      </label>
-      <label>API Key
-        <input name="apiKey" type="password" autocomplete="off" spellcheck="false" />
-      </label>
-      <p>填写后记在这台浏览器的 localStorage 里，刷新后还在。三项都留下它才会走，留空就站着。地址填到 /v1 为止。</p>
-      <menu>
-        <button id="settings-close" type="button" value="cancel">关闭</button>
-        <button type="submit" value="default">保存</button>
-      </menu>
-    </form>
-  </dialog>
-</main>
-<script type="module" src="/src/client/main.ts"></script>
-</body>
+      <dialog id="settings">
+        <form id="settings-form" method="dialog">
+          <h2>模型</h2>
+          <label
+            >Base URL
+            <input
+              name="baseURL"
+              type="url"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="https://api.deepseek.com/v1"
+            />
+          </label>
+          <label
+            >Model ID
+            <input
+              name="model"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="deepseek-chat"
+            />
+          </label>
+          <label
+            >API Key
+            <input name="apiKey" type="password" autocomplete="off" spellcheck="false" />
+          </label>
+          <p>
+            填写后记在这台浏览器的 localStorage
+            里，刷新后还在。三项都留下它才会走，留空就站着。地址填到 /v1 为止。
+          </p>
+          <menu>
+            <button id="settings-close" type="button" value="cancel">关闭</button>
+            <button type="submit" value="default">保存</button>
+          </menu>
+        </form>
+      </dialog>
+    </main>
+    <script type="module" src="/src/client/main.ts"></script>
+  </body>
 </html>

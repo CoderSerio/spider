@@ -19,7 +19,11 @@ export interface KindSpec {
 }
 
 export const KINDS: Record<string, KindSpec> = {
-  apple: { properties: ['edible', 'carryable'], eat: { duration: 3, stages: 2, removes: true }, rest: 0 },
+  apple: {
+    properties: ['edible', 'carryable'],
+    eat: { duration: 3, stages: 2, removes: true },
+    rest: 0,
+  },
   grass: { properties: ['cover'], rest: 0 },
   nest: { properties: ['home', 'sleepable'], rest: 0 },
 };

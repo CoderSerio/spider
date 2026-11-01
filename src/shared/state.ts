@@ -25,9 +25,7 @@ export interface SpiderState {
   feet: Vec3[];
 }
 
-export type Footprint =
-  | { kind: 'circle'; r: number }
-  | { kind: 'box'; hx: number; hz: number };
+export type Footprint = { kind: 'circle'; r: number } | { kind: 'box'; hx: number; hz: number };
 
 export interface EntityState {
   id: string;
@@ -136,7 +134,7 @@ export function toHeading(yaw: number): number {
 }
 
 export function wrapDegrees(degrees: number): number {
-  const wrapped = (((degrees + 180) % 360) + 360) % 360 - 180;
+  const wrapped = ((((degrees + 180) % 360) + 360) % 360) - 180;
   return wrapped === -180 ? 180 : wrapped;
 }
 
@@ -182,7 +180,14 @@ export function toObservation(
     });
   }
   const carrying = world.carrying;
-  const felt = senseBody(px, pz, state.yaw, heading, (x, z) => world.terrain.height(x, z), world.blocks);
+  const felt = senseBody(
+    px,
+    pz,
+    state.yaw,
+    heading,
+    (x, z) => world.terrain.height(x, z),
+    world.blocks,
+  );
   return {
     time: Number(state.time.toFixed(3)),
     seed: world.seed,
@@ -209,7 +214,9 @@ export function toObservation(
       nearby: felt.nearby,
       ways: felt.ways,
       legsLifting: state.feet
-        .map((foot, index) => (foot.y > world.terrain.height(foot.x, foot.z) + GROUND_LIFT ? index : -1))
+        .map((foot, index) =>
+          foot.y > world.terrain.height(foot.x, foot.z) + GROUND_LIFT ? index : -1,
+        )
         .filter((index) => index >= 0),
     },
     entities: seen,

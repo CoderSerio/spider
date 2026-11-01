@@ -35,7 +35,10 @@ export class ObserveOverlay {
     const quiet = new LineBasicMaterial({ color: PALETTE.grid });
     this.#viewRing = new Line(ringGeometry(), ink);
     this.#reachRing = new Line(ringGeometry(), quiet);
-    this.#ahead = new Line(new BufferGeometry().setAttribute('position', new BufferAttribute(new Float32Array(6), 3)), ink);
+    this.#ahead = new Line(
+      new BufferGeometry().setAttribute('position', new BufferAttribute(new Float32Array(6), 3)),
+      ink,
+    );
     this.#marks = new LineSegments(tickGeometry(24), ink);
     this.#dim = new LineSegments(tickGeometry(24), quiet);
     this.#root.add(this.#viewRing, this.#reachRing, this.#ahead, this.#marks, this.#dim);
@@ -69,7 +72,9 @@ export class ObserveOverlay {
     const x = spider.root.position.x;
     const z = spider.root.position.z;
     const height = (px: number, pz: number) => world.terrain.height(px, pz);
-    const distance = grassHere(x, z, world.entities) ? Math.min(VIEW_DISTANCE, GRASS_VIEW) : VIEW_DISTANCE;
+    const distance = grassHere(x, z, world.entities)
+      ? Math.min(VIEW_DISTANCE, GRASS_VIEW)
+      : VIEW_DISTANCE;
     const observation = toObservation(spider.capture(), world, REACH, distance);
     const ground = (px: number, pz: number) => surfaceAt(height, px, pz) + 0.14;
 
@@ -93,14 +98,33 @@ export class ObserveOverlay {
     const pins: string[] = [];
     for (const entity of world.entities) {
       const hit = seen.get(entity.id);
-      const state = hit ? (hit.inReach ? 'reach' : 'seen') : Math.hypot(entity.x - x, entity.z - z) > observation.view ? 'beyond' : 'hidden';
+      const state = hit
+        ? hit.inReach
+          ? 'reach'
+          : 'seen'
+        : Math.hypot(entity.x - x, entity.z - z) > observation.view
+          ? 'beyond'
+          : 'hidden';
       const slot = state === 'seen' || state === 'reach' ? inkCount++ : dimCount++;
       const lines = state === 'seen' || state === 'reach' ? this.#marks : this.#dim;
-      layTick(lines.geometry.getAttribute('position') as BufferAttribute, slot, entity.x, entity.z, ground);
+      layTick(
+        lines.geometry.getAttribute('position') as BufferAttribute,
+        slot,
+        entity.x,
+        entity.z,
+        ground,
+      );
       const point = project(camera, entity.x, ground(entity.x, entity.z) + 0.4, entity.z, view);
       if (!point) continue;
       const name = NAME[entity.kind] ?? entity.kind;
-      const note = state === 'reach' ? '够得着' : state === 'seen' ? '看见' : state === 'hidden' ? '挡住' : '视线外';
+      const note =
+        state === 'reach'
+          ? '够得着'
+          : state === 'seen'
+            ? '看见'
+            : state === 'hidden'
+              ? '挡住'
+              : '视线外';
       pins.push(
         `<span class="observe-pin" data-state="${state}" style="left:${point.x}px;top:${point.y}px">${entity.id}　${name}　${note}</span>`,
       );
@@ -119,7 +143,11 @@ export class ObserveOverlay {
           ? `面前 ${aheadInfo.open} 米是近乎竖直的坡`
           : `面前 ${aheadInfo.open} 米是空的`;
     const carrying = observation.self.carrying.map((item) => item.id).join('、') || '空';
-    const where = observation.self.home ? '在巢里' : observation.self.cover === 'grass' ? '在草里' : '在空地上';
+    const where = observation.self.home
+      ? '在巢里'
+      : observation.self.cover === 'grass'
+        ? '在草里'
+        : '在空地上';
     this.#readout.textContent = [
       `${where}　朝向 ${observation.self.heading}°　速度 ${observation.self.speed}`,
       `看见 ${observation.view}　够得着 ${REACH}　${front}`,
@@ -130,11 +158,17 @@ export class ObserveOverlay {
 }
 
 function ringGeometry(): BufferGeometry {
-  return new BufferGeometry().setAttribute('position', new BufferAttribute(new Float32Array((RING + 1) * 3), 3));
+  return new BufferGeometry().setAttribute(
+    'position',
+    new BufferAttribute(new Float32Array((RING + 1) * 3), 3),
+  );
 }
 
 function tickGeometry(count: number): BufferGeometry {
-  return new BufferGeometry().setAttribute('position', new BufferAttribute(new Float32Array(count * 4 * 3), 3));
+  return new BufferGeometry().setAttribute(
+    'position',
+    new BufferAttribute(new Float32Array(count * 4 * 3), 3),
+  );
 }
 
 function layRing(

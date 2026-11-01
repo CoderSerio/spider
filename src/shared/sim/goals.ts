@@ -24,7 +24,7 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 function wrapRadians(radians: number): number {
-  const wrapped = (((radians + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+  const wrapped = ((((radians + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) - Math.PI;
   return wrapped === -Math.PI ? Math.PI : wrapped;
 }
 
@@ -105,7 +105,11 @@ function segmentLeft(points: readonly PlanPoint[], index: number, place: PlanPoi
  */
 export function routeGoal(spider: Spider, points: readonly PlanPoint[], fast = false): Goal {
   let index = points.length > 1 ? 1 : 0;
-  const length = points.reduce((sum, point, i) => (i === 0 ? 0 : sum + Math.hypot(point.x - points[i - 1].x, point.z - points[i - 1].z)), 0);
+  const length = points.reduce(
+    (sum, point, i) =>
+      i === 0 ? 0 : sum + Math.hypot(point.x - points[i - 1].x, point.z - points[i - 1].z),
+    0,
+  );
 
   const here = () => ({ x: spider.root.position.x, z: spider.root.position.z });
   const waypoint = () => points[Math.min(index, points.length - 1)];
@@ -126,7 +130,8 @@ export function routeGoal(spider: Spider, points: readonly PlanPoint[], fast = f
       const distance = Math.hypot(dx, dz);
       // Close enough, and slow. Cutting the throttle here and then turning
       // back onto the point makes the last step pace past it.
-      if (last && left < 0.2 && distance < 0.45 && Math.abs(spider.speed) < 0.45) return { ...IDLE };
+      if (last && left < 0.2 && distance < 0.45 && Math.abs(spider.speed) < 0.45)
+        return { ...IDLE };
       const along = last ? Math.max(0, left) : distance;
       const throttle = aligned ? clamp(along / (fast ? 2.4 : 1.1), 0, 1) : 0;
       return { ...IDLE, throttle, turn, boost: fast ? 1 : 0 };
@@ -141,7 +146,13 @@ export function routeGoal(spider: Spider, points: readonly PlanPoint[], fast = f
         return false;
       }
       const left = segmentLeft(points, index, here());
-      return last && distance < 0.45 && left < 0.2 && Math.abs(spider.speed) < 0.3 && Math.abs(spider.yawRate) < 0.2;
+      return (
+        last &&
+        distance < 0.45 &&
+        left < 0.2 &&
+        Math.abs(spider.speed) < 0.3 &&
+        Math.abs(spider.yawRate) < 0.2
+      );
     },
     result() {
       if (spider.stuckFor < STUCK_LIMIT) return {};

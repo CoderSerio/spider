@@ -50,7 +50,14 @@ export function restingY(
   for (const ring of [radius * 0.5, radius]) {
     for (let i = 0; i < 12; i++) {
       const angle = (i / 12) * Math.PI * 2;
-      top = Math.max(top, surfaceAt(terrain.height.bind(terrain), x + Math.cos(angle) * ring, z + Math.sin(angle) * ring));
+      top = Math.max(
+        top,
+        surfaceAt(
+          terrain.height.bind(terrain),
+          x + Math.cos(angle) * ring,
+          z + Math.sin(angle) * ring,
+        ),
+      );
     }
   }
   return top + rest + CLEARANCE;
