@@ -80,7 +80,7 @@ export function spiderTools(session: SimSession) {
     }),
     move_to: tool({
       description:
-        '走到地上的一个点。挡住的固体和太陡的坡由这条路自己绕开，你不用为了绕路再去转身。大约超过 2 个单位就设 fast。到了之后，detour 是一句已经写好的话，说明绕开了什么；直线能到时 detour 是 null。哪里都走不过去时 reason 是 no-path。走着被坡卡住是 steep，被固体卡住是 blocked。',
+        '走到地上的一个点。挡住的固体由这条路自己绕开，你不用为了绕路再去转身。坡你自己爬。大约超过 2 个单位就设 fast。到了之后，detour 是一句已经写好的话，说明绕开了什么；直线能到时 detour 是 null。哪里都走不过去时 reason 是 no-path。近乎竖直的地方是 steep，被固体卡住是 blocked。',
       inputSchema: call({
         x: z.number().describe('目标的 x，单位。'),
         z: z.number().describe('目标的 z，单位。'),

@@ -23,16 +23,11 @@ import { inkMat, paperMat } from '../shared/sim/parts.js';
 const nestMat = paperMat.clone();
 nestMat.side = DoubleSide;
 
-/** Line-art prop. The apple's origin is its bottom. Nest, grass and buildings sit on the ground. */
+/** Line-art prop. The apple's origin is its bottom. Nest and grass sit on the ground. */
 export function buildProp(kind: string, stage: number, footprint?: Footprint): Group | null {
   if (kind === 'apple') return buildApple(stage);
   if (kind === 'nest') return buildNest();
   if (kind === 'grass') return buildGrass(footprint?.kind === 'circle' ? footprint.r : 1.7);
-  if (kind === 'building') {
-    const hx = footprint?.kind === 'box' ? footprint.hx : 1.15;
-    const hz = footprint?.kind === 'box' ? footprint.hz : 0.95;
-    return buildBuilding(hx, hz);
-  }
   return null;
 }
 
@@ -219,18 +214,4 @@ export function drapeGrass(
   }
 }
 
-function buildBuilding(hx: number, hz: number): Group {
-  const house = new Group();
-  const height = 1.15;
-  const geo = new BoxGeometry(hx * 2, height, hz * 2);
-  const mesh = new Mesh(geo, paperMat);
-  mesh.position.y = height / 2;
-  mesh.add(new LineSegments(new EdgesGeometry(geo, 1), inkMat));
-  house.add(mesh);
-  const roof = new BoxGeometry(hx * 2.15, 0.08, hz * 2.15);
-  const cap = new Mesh(roof, paperMat);
-  cap.position.y = height + 0.04;
-  cap.add(new LineSegments(new EdgesGeometry(roof, 1), inkMat));
-  house.add(cap);
-  return house;
-}
+

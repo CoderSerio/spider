@@ -14,6 +14,7 @@ import { TERRAIN } from '../shared/terrain.js';
 import type { WorldState } from '../shared/state.js';
 import type { Spider } from '../shared/sim/Spider.js';
 import { buildIsland } from './groundView.js';
+import { ObserveOverlay } from './observeView.js';
 import { buildProp, drapeGrass } from './props.js';
 import { createSound } from './sound.js';
 
@@ -61,12 +62,16 @@ export class Stage {
   readonly #sound = createSound(window);
   #heard = false;
   readonly #wasLifted: boolean[] = [];
+  /** Ids on the back last frame. Null until the first sync, so birth is silent. */
+  #carried: Set<string> | null = null;
+  #halt: 'clear' | 'solid' | 'steep' = 'clear';
 
   #yaw: number = VIEW.yaw;
   #pitch: number = VIEW.pitch;
   #distance: number = VIEW.distance;
-  /** Overhead map. Drag pans, the wheel changes height. */
+  /** God view. Drag pans, the wheel changes height, and the sense overlay is on. */
   #overlook = false;
+  readonly #observe: ObserveOverlay;
   readonly #focus = new Vector3();
   #dragging = false;
   #pointerX = 0;
@@ -95,7 +100,8 @@ export class Stage {
     host.appendChild(this.#renderer.domElement);
 
     this.#camera = new PerspectiveCamera(VIEW.fov, 1, VIEW.near, VIEW.far);
-    this.#scene.add(this.#spider.root, this.#spider.rig);
+    this.#observe = new ObserveOverlay(host);
+    this.#scene.add(this.#spider.root, this.#spider.rig, this.#observe.object);
 
     this.#bindEvents();
     this.#resize();
@@ -112,7 +118,7 @@ export class Stage {
     this.#onAnchor = onAnchor;
   }
 
-  /** Switch between the chase camera and a free overhead map. */
+  /** Switch between the chase camera and the overhead observation view. */
   setOverlook(on: boolean): void {
     this.#overlook = on;
     if (on) {
@@ -139,6 +145,16 @@ export class Stage {
 
     const alive = new Set<string>();
     const shown = world.entities.map((entity) => ({ entity, x: entity.x, y: entity.y, z: entity.z }));
+    const carrying = new Set(world.carrying.map((item) => item.id));
+    if (this.#carried) {
+      for (const id of carrying) if (!this.#carried.has(id)) this.#sound.grasp();
+      for (const id of this.#carried) {
+        if (carrying.has(id)) continue;
+        if (world.entities.some((item) => item.id === id)) this.#sound.place();
+      }
+    }
+    this.#carried = carrying;
+
     const back = world.carrying.length;
     const yaw = this.#spider.yaw;
     const fx = -Math.sin(yaw);
@@ -181,6 +197,11 @@ export class Stage {
       this.#stages.delete(id);
       this.#sound.take();
     }
+  }
+
+  /** A quiet tick for words appearing beside the spider. */
+  voice(): void {
+    this.#sound.voice();
   }
 
   setPlaceMode(enabled: boolean): void {
@@ -315,6 +336,8 @@ export class Stage {
     this.#feedback();
 
     this.#placeCamera(dt);
+    const world = this.#world?.();
+    if (world) this.#observe.sync(this.#overlook, this.#camera, this.#spider, world, this.#view);
     this.#renderer.render(this.#scene, this.#camera);
     this.#onAnchor?.(this.#aboveSpider());
   };
@@ -333,7 +356,10 @@ export class Stage {
       if (this.#wasLifted[i] && !lifted) landed = true;
       this.#wasLifted[i] = lifted;
     }
-    if (landed) this.#sound.step();
+    if (landed) this.#sound.step(this.#spider.speed);
+    const halt = this.#spider.halt;
+    if (halt !== 'clear' && this.#halt === 'clear') this.#sound.knock();
+    this.#halt = halt;
   }
 
   /** A point above the shell, or null when it is behind the camera. */

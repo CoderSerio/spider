@@ -12,7 +12,7 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
   const model = doc.querySelector<HTMLElement>('#pilot-model');
   const trace = doc.querySelector<HTMLOListElement>('#trace');
   const open = doc.querySelector<HTMLButtonElement>('#settings-open');
-  const map = doc.querySelector<HTMLButtonElement>('#map-open');
+  const map = doc.querySelector<HTMLButtonElement>('#observe-open');
   const lookHint = doc.querySelector<HTMLElement>('#look-hint');
   const dialog = doc.querySelector<HTMLDialogElement>('#settings');
   const settingsForm = doc.querySelector<HTMLFormElement>('#settings-form');
@@ -27,10 +27,10 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
     if (lookHint) lookHint.textContent = on ? '拖动平移　滚轮远近' : '拖动旋转视角　滚轮缩放';
   };
 
-  showMap(location.hash === '#map');
+  showMap(location.hash === '#observe' || location.hash === '#map');
   map.addEventListener('click', () => {
     const on = map.getAttribute('aria-pressed') !== 'true';
-    history.replaceState(null, '', on ? '#map' : location.pathname + location.search);
+    history.replaceState(null, '', on ? '#observe' : location.pathname + location.search);
     showMap(on);
   });
 
@@ -60,6 +60,7 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
     live.textContent = line;
     trace.append(live);
     touch();
+    if (kind === 'speech' || kind === 'thought') stage.voice();
   };
 
   const say = (chunk: string): void => {
@@ -73,6 +74,7 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
     }
     live.textContent = `${live.textContent ?? ''}${chunk}`;
     touch();
+    stage.voice();
   };
 
   const field = (name: string): HTMLInputElement => {

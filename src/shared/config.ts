@@ -69,8 +69,8 @@ export const GAIT = {
   roll: 0.08,
   liftRate: 0.5,
   liftEase: 5,
-  /** Rise over run. Steeper ground stops the body instead of letting it climb a wall. */
-  maxSlope: 0.85,
+  /** Rise over run at 85 degrees. The body sticks to slopes and stops only on a near-vertical face. */
+  maxSlope: Math.tan((85 * Math.PI) / 180),
   fallAccel: 14,
   fallMax: 8,
   /** Gap above the support before the body falls instead of easing down. */

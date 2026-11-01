@@ -1,6 +1,6 @@
 /**
  * What a thing is, to the spider who senses it.
- * An apple can be eaten or carried. Grass only shortens sight. A solid stops you.
+ * An apple can be eaten or carried. Grass only shortens sight. The nest is home.
  */
 
 export interface EatSpec {
@@ -21,7 +21,6 @@ export interface KindSpec {
 export const KINDS: Record<string, KindSpec> = {
   apple: { properties: ['edible', 'carryable'], eat: { duration: 3, stages: 2, removes: true }, rest: 0 },
   grass: { properties: ['cover'], rest: 0 },
-  building: { properties: ['solid'], rest: 0 },
   nest: { properties: ['home', 'sleepable'], rest: 0 },
 };
 

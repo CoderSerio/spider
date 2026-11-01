@@ -18,7 +18,6 @@ export const REACH_Y = 1.6;
 
 const APPLES = 5;
 const GRASS = 5;
-const BUILDINGS = 3;
 const MIN_GAP = 3.4;
 
 const quantize = (value: number): number => Math.round(value * 10) / 10;
@@ -59,7 +58,7 @@ export function restingY(
 
 /**
  * A seeded island. You are born in the nest. Apples can be eaten or carried.
- * Grass can be walked through. Buildings and the nest walls cannot.
+ * Grass can be walked through. The nest walls cannot.
  * The same seed builds the same place.
  */
 export function createWorld(seed = Math.floor(Math.random() * 1_000_000_000)): WorldState {
@@ -67,15 +66,9 @@ export function createWorld(seed = Math.floor(Math.random() * 1_000_000_000)): W
   const rng = mulberry32(seed ^ 0x9e3779b9);
   const blocks = nestBlocks();
   const placed: { x: number; z: number }[] = [];
-  const buildings = scatter(rng, terrain, placed, blocks, 'building', BUILDINGS, 9);
-  for (const building of buildings) {
-    const box = footprintBox(building);
-    if (box) blocks.push({ id: building.id, ...box, height: 1.15 });
-  }
   const entities: EntityState[] = [
     { id: 'home', kind: 'nest', x: 0, y: 0.02, z: 0, stage: 0 },
     ...scatter(rng, terrain, placed, blocks, 'grass', GRASS, 6.5),
-    ...buildings,
     ...scatter(rng, terrain, placed, blocks, 'apple', APPLES, 6),
   ];
   return { seed: terrain.seed, terrain, entities, blocks, carrying: [] };
@@ -104,16 +97,6 @@ export function nestBlocks(): Block[] {
   ];
 }
 
-function footprintBox(entity: EntityState): { minX: number; maxX: number; minZ: number; maxZ: number } | null {
-  if (entity.footprint?.kind !== 'box') return null;
-  return {
-    minX: entity.x - entity.footprint.hx,
-    maxX: entity.x + entity.footprint.hx,
-    minZ: entity.z - entity.footprint.hz,
-    maxZ: entity.z + entity.footprint.hz,
-  };
-}
-
 function scatter(
   rng: () => number,
   terrain: Terrain,
@@ -139,13 +122,8 @@ function scatter(
     if (slope > 0.32) continue;
     const gap = kind === 'grass' ? 7 : MIN_GAP;
     if (placed.some((point) => Math.hypot(point.x - x, point.z - z) < gap)) continue;
-    const footprint =
-      kind === 'grass'
-        ? { kind: 'circle' as const, r: 3.2 }
-        : kind === 'building'
-          ? { kind: 'box' as const, hx: 1.15, hz: 0.95 }
-          : undefined;
-    const probe = footprint?.kind === 'box' ? footprint.hx : footprint?.kind === 'circle' ? footprint.r : 0.2;
+    const footprint = kind === 'grass' ? { kind: 'circle' as const, r: 3.2 } : undefined;
+    const probe = footprint?.kind === 'circle' ? footprint.r : 0.2;
     if (blockedAt(x, z, blocks, probe)) continue;
     placed.push({ x, z });
     entities.push({
