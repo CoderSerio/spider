@@ -1,12 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetSpiderDb } from '../../src/client/journal/db.js';
+import { Diary } from '../../src/client/journal/diary.js';
+import { shiftDate } from '../../src/client/journal/dates.js';
+import { summarizeDiary } from '../../src/client/journal/summarize.js';
 import { mountPanel } from '../../src/client/panel.js';
-import { readPilot, writePilot } from '../../src/client/settings.js';
+import { readPilot, writePilot, type PilotSettings } from '../../src/client/settings.js';
 import type { Stage } from '../../src/client/stage.js';
 import type { SimSession } from '../../src/shared/sim/session.js';
 
 const loop = vi.hoisted(() => ({ runAgent: vi.fn() }));
 
 vi.mock('../../src/client/agent/loop.js', () => ({ runAgent: loop.runAgent }));
+
+vi.mock('../../src/client/journal/summarize.js', async () => {
+  const actual = await vi.importActual<typeof import('../../src/client/journal/summarize.js')>(
+    '../../src/client/journal/summarize.js',
+  );
+  return {
+    ...actual,
+    summarizeDiary: vi.fn(async () => ({ line: '记下了', summary: '摘要' })),
+  };
+});
 
 const CHROME = `
   <form id="pilot">
@@ -16,6 +30,10 @@ const CHROME = `
   <span id="pilot-model"></span>
   <ol id="trace"></ol>
   <button id="settings-open" type="button"></button>
+  <menu id="corner-menu" hidden>
+    <button id="menu-model" type="button">模型</button>
+    <button id="menu-memory" type="button">记忆</button>
+  </menu>
   <button id="observe-open" type="button"></button>
   <span id="look-hint"></span>
   <dialog id="settings">
@@ -23,8 +41,25 @@ const CHROME = `
       <input name="baseURL" />
       <input name="model" />
       <input name="apiKey" />
+      <input name="contextTokens" />
+      <input name="compact" type="checkbox" />
+      <input name="compactKb" />
     </form>
     <button id="settings-close" type="button"></button>
+  </dialog>
+  <dialog id="memory">
+    <form id="memory-form">
+      <select name="date"></select>
+      <input name="line" />
+      <textarea name="noted"></textarea>
+      <textarea name="summary"></textarea>
+    </form>
+    <p id="memory-empty" hidden></p>
+    <button id="memory-close" type="button"></button>
+  </dialog>
+  <dialog id="leave">
+    <button id="leave-close" type="button"></button>
+    <button id="leave-summarize" type="button"></button>
   </dialog>
 `;
 
@@ -81,6 +116,7 @@ async function flush(): Promise<void> {
 }
 
 beforeEach(() => {
+  vi.unstubAllEnvs();
   localStorage.clear();
   history.replaceState(null, '', '/');
   loop.runAgent.mockReset();
@@ -148,6 +184,7 @@ describe('settings dialog', () => {
     document.querySelector('[name="apiKey"]')!.remove();
     mountPanel(document, fakeSession(), fakeStage());
     clickButton('#settings-open');
+    clickButton('#menu-model');
     window.removeEventListener('error', onError);
     expect(onError).toHaveBeenCalled();
   });
@@ -156,6 +193,8 @@ describe('settings dialog', () => {
     ready();
     mount();
     clickButton('#settings-open');
+    expect(document.querySelector<HTMLElement>('#corner-menu')!.hidden).toBe(false);
+    clickButton('#menu-model');
     expect(field('baseURL').value).toBe('https://example.com');
     expect(document.querySelector<HTMLDialogElement>('#settings')!.open).toBe(true);
 
@@ -548,5 +587,419 @@ describe('speech bubble follow', () => {
     anchor()({ x: 400, y: 300 });
     expect(trace.hidden).toBe(true);
     expect(trace.childElementCount).toBe(0);
+  });
+});
+
+const PILOT: PilotSettings = {
+  baseURL: 'https://example.com',
+  model: 'model-1',
+  apiKey: 'key',
+  contextTokens: null,
+  compact: false,
+  compactKb: null,
+};
+
+describe('diary panel', () => {
+  beforeEach(async () => {
+    await resetSpiderDb();
+    vi.mocked(summarizeDiary).mockClear();
+  });
+
+  async function seedDay(withTurns = true): Promise<Diary> {
+    const diary = await Diary.open(new Date());
+    if (withTurns) await diary.record('走', '好。', [], PILOT);
+    return diary;
+  }
+
+  it('opens the memory dialog with the latest page', async () => {
+    const day = await seedDay(false);
+    await day.write({ date: day.date, line: '不要吃红的', noted: '记住', summary: '摘要' });
+    mount();
+    await flush();
+    clickButton('#menu-memory');
+    await flush();
+    expect(document.querySelector<HTMLDialogElement>('#memory')!.open).toBe(true);
+    expect(document.querySelector<HTMLSelectElement>('[name="date"]')!.value).toBe(day.date);
+    expect(document.querySelector<HTMLInputElement>('[name="line"]')!.value).toBe('不要吃红的');
+    expect(document.querySelector<HTMLTextAreaElement>('[name="noted"]')!.value).toBe('记住');
+  });
+
+  it('clears the memory form when there are no pages', async () => {
+    mount();
+    await flush();
+    clickButton('#menu-memory');
+    await flush();
+    expect(document.querySelector('#memory-empty')!.hidden).toBe(false);
+    expect(document.querySelector<HTMLInputElement>('[name="line"]')!.value).toBe('');
+  });
+
+  it('keeps running when the diary cannot open', async () => {
+    const spy = vi.spyOn(Diary, 'open').mockRejectedValueOnce(new Error('no db'));
+    mount();
+    await flush();
+    clickButton('#menu-memory');
+    await flush();
+    expect(document.querySelector<HTMLDialogElement>('#memory')!.open).toBe(false);
+    spy.mockRestore();
+  });
+
+  it('loads another day when the date changes', async () => {
+    const day = await seedDay(false);
+    const before = shiftDate(day.date, -1);
+    await day.write({ date: before, line: '昨天', noted: '旧话' });
+    await day.write({ date: day.date, line: '今天' });
+    mount();
+    await flush();
+    clickButton('#menu-memory');
+    await flush();
+    const select = document.querySelector<HTMLSelectElement>('[name="date"]')!;
+    select.value = before;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await flush();
+    expect(document.querySelector<HTMLInputElement>('[name="line"]')!.value).toBe('昨天');
+    expect(document.querySelector<HTMLTextAreaElement>('[name="noted"]')!.value).toBe('旧话');
+    select.value = '1999-01-01';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await flush();
+    expect(document.querySelector<HTMLInputElement>('[name="line"]')!.value).toBe('昨天');
+  });
+
+  it('writes the memory form', async () => {
+    const day = await seedDay(false);
+    await day.write({ date: day.date, line: '旧' });
+    mount();
+    await flush();
+    clickButton('#menu-memory');
+    await flush();
+    document.querySelector<HTMLInputElement>('[name="line"]')!.value = '新的一句';
+    document.querySelector<HTMLTextAreaElement>('[name="noted"]')!.value = '记住';
+    document
+      .querySelector('#memory-form')!
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+    expect(await day.read(day.date)).toMatchObject({ line: '新的一句', noted: '记住' });
+  });
+
+  it('dismisses the leave dialog', async () => {
+    await seedDay();
+    mount();
+    await flush();
+    clickButton('#leave-close');
+    expect(document.querySelector<HTMLDialogElement>('#leave')!.open).toBe(false);
+  });
+
+  it('summarizes from the leave dialog', async () => {
+    await seedDay();
+    ready();
+    mount();
+    await flush();
+    clickButton('#leave-summarize');
+    await flush();
+    expect(document.querySelector<HTMLDialogElement>('#leave')!.open).toBe(false);
+    expect(summarizeDiary).toHaveBeenCalled();
+  });
+
+  it('shows the error when summarizing fails', async () => {
+    await seedDay();
+    ready();
+    vi.mocked(summarizeDiary).mockRejectedValueOnce(new Error('boom'));
+    mount();
+    await flush();
+    clickButton('#leave-summarize');
+    await flush();
+    expect(document.querySelector('#trace')!.textContent).toContain('boom');
+  });
+
+  it('does not ask to leave when Vite is serving the dev page', async () => {
+    vi.stubEnv('MODE', 'development');
+    await seedDay();
+    mount();
+    await flush();
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+    await flush();
+    expect(event.defaultPrevented).toBe(false);
+    expect(document.querySelector<HTMLDialogElement>('#leave')!.open).toBe(false);
+  });
+
+  it('opens the leave dialog on unload when the day is behind', async () => {
+    await seedDay();
+    mount();
+    await flush();
+    window.dispatchEvent(new Event('beforeunload', { cancelable: true }));
+    await flush();
+    expect(document.querySelector<HTMLDialogElement>('#leave')!.open).toBe(true);
+  });
+
+  it('does not open leave on unload when nothing is behind', async () => {
+    await seedDay(false);
+    mount();
+    await flush();
+    window.dispatchEvent(new Event('beforeunload', { cancelable: true }));
+    await flush();
+    expect(document.querySelector<HTMLDialogElement>('#leave')!.open).toBe(false);
+  });
+
+  it('saves the diary when the page hides', async () => {
+    await seedDay();
+    const spy = vi.spyOn(Diary.prototype, 'save');
+    mount();
+    await flush();
+    window.dispatchEvent(new Event('pagehide'));
+    await flush();
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('throws when the memory form is missing a field', () => {
+    document.body.innerHTML = CHROME;
+    document.querySelector('#memory-form [name="date"]')!.remove();
+    expect(() => mountPanel(document, fakeSession(), fakeStage())).toThrow('Missing pilot chrome');
+  });
+
+  it('fills the compact fields from storage', () => {
+    writePilot({
+      baseURL: 'https://example.com',
+      model: 'model-1',
+      apiKey: 'key',
+      contextTokens: 4096,
+      compact: true,
+      compactKb: 400,
+    });
+    mount();
+    clickButton('#settings-open');
+    clickButton('#menu-model');
+    expect(field('contextTokens').value).toBe('4096');
+    expect(field('compact').checked).toBe(true);
+    expect(field('compactKb').value).toBe('400');
+    writePilot({ baseURL: 'https://example.com', model: 'model-1', apiKey: 'key' });
+    clickButton('#settings-open');
+    clickButton('#menu-model');
+    expect(field('contextTokens').value).toBe('');
+    expect(field('compactKb').value).toBe('');
+  });
+
+  it('marks a directory page without a line with its date', async () => {
+    const day = await seedDay(false);
+    await day.write({ date: shiftDate(day.date, -1), line: '昨天' });
+    await day.write({ date: day.date, summary: '有摘要' });
+    mount();
+    await flush();
+    clickButton('#menu-memory');
+    await flush();
+    const options = [...document.querySelectorAll('#memory-form option')];
+    expect(options.map((option) => option.textContent)).toEqual([
+      `${shiftDate(day.date, -1)} 昨天`,
+      day.date,
+    ]);
+  });
+
+  it('submits an empty date using today', async () => {
+    const day = await seedDay(false);
+    mount();
+    await flush();
+    clickButton('#menu-memory');
+    await flush();
+    document.querySelector<HTMLInputElement>('[name="line"]')!.value = '空日期';
+    document
+      .querySelector('#memory-form')!
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+    expect(await day.read(day.date)).toMatchObject({ line: '空日期' });
+  });
+
+  it('ignores the memory and leave buttons before the diary opens', async () => {
+    const spy = vi.spyOn(Diary, 'open').mockRejectedValueOnce(new Error('no db'));
+    mount();
+    await flush();
+    clickButton('#menu-memory');
+    await flush();
+    document
+      .querySelector('#memory-form')!
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    clickButton('#leave-close');
+    clickButton('#leave-summarize');
+    clickButton('#memory-close');
+    expect(document.querySelector<HTMLDialogElement>('#memory')!.open).toBe(false);
+    expect(document.querySelector<HTMLDialogElement>('#leave')!.open).toBe(false);
+    spy.mockRestore();
+  });
+
+  it('shows a non-error when summarizing fails oddly', async () => {
+    await seedDay();
+    ready();
+    vi.mocked(summarizeDiary).mockRejectedValueOnce('plain');
+    mount();
+    await flush();
+    clickButton('#leave-summarize');
+    await flush();
+    expect(document.querySelector('#trace')!.textContent).toContain('plain');
+  });
+
+  it('stops quietly when aborted before the diary opens', async () => {
+    ready();
+    mount();
+    document.querySelector<HTMLInputElement>('#goal')!.value = 'go';
+    submit();
+    clickButton('#pilot-send');
+    await flush();
+    expect(document.querySelector('#trace')!.textContent).toContain('已停止');
+  });
+
+  it('records tool results and error events', async () => {
+    ready();
+    mount();
+    await flush();
+    loop.runAgent.mockImplementation(async ({ onEvent }: { onEvent: (event: unknown) => void }) => {
+      onEvent({ type: 'tool-call', name: 'pick_up', input: { description: '拿' } });
+      onEvent({ type: 'tool-result', name: 'pick_up', output: { ok: true } });
+      onEvent({ type: 'tool-result', name: 'drop', output: { ok: true } });
+      onEvent({ type: 'error', message: 'boom' });
+      return '';
+    });
+    document.querySelector<HTMLInputElement>('#goal')!.value = 'go';
+    submit();
+    await flush();
+    expect(document.querySelector('#trace')!.textContent).toContain('boom');
+  });
+
+  it('ignores events that arrive after an abort', async () => {
+    ready();
+    mount();
+    await flush();
+    loop.runAgent.mockImplementation(async ({ onEvent }: { onEvent: (event: unknown) => void }) => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      onEvent({ type: 'text', text: '晚了' });
+      return '';
+    });
+    document.querySelector<HTMLInputElement>('#goal')!.value = 'go';
+    submit();
+    clickButton('#pilot-send');
+    await flush();
+    expect(document.querySelector('#trace')!.textContent).toContain('已停止');
+    expect(document.querySelector('#trace')!.textContent).not.toContain('晚了');
+  });
+
+  it('reports a diary write failure', async () => {
+    ready();
+    await seedDay();
+    vi.spyOn(Diary.prototype, 'record').mockRejectedValueOnce('disk');
+    mount();
+    await flush();
+    loop.runAgent.mockResolvedValue('');
+    document.querySelector<HTMLInputElement>('#goal')!.value = 'go';
+    submit();
+    await flush();
+    expect(document.querySelector('#trace')!.textContent).toContain('disk');
+  });
+
+  it('reports a diary write error', async () => {
+    ready();
+    await seedDay();
+    vi.spyOn(Diary.prototype, 'record').mockRejectedValueOnce(new Error('disk full'));
+    mount();
+    await flush();
+    loop.runAgent.mockResolvedValue('');
+    document.querySelector<HTMLInputElement>('#goal')!.value = 'go';
+    submit();
+    await flush();
+    expect(document.querySelector('#trace')!.textContent).toContain('disk full');
+  });
+
+  it('stops a replaced run quietly before the diary opens', async () => {
+    ready();
+    mount();
+    document.querySelector<HTMLInputElement>('#goal')!.value = 'go';
+    submit();
+    document.querySelector<HTMLInputElement>('#goal')!.value = 'again';
+    submit();
+    await flush();
+    expect(document.querySelector('#trace')!.textContent).not.toContain('已停止');
+  });
+
+  it('keeps going when the morning backfill fails', async () => {
+    vi.spyOn(Diary.prototype, 'backfill').mockRejectedValueOnce(new Error('no model'));
+    mount();
+    await flush();
+    expect(document.querySelector<HTMLDialogElement>('#memory')!.open).toBe(false);
+  });
+
+  it('runs without a diary', async () => {
+    ready();
+    const spy = vi.spyOn(Diary, 'open').mockRejectedValueOnce(new Error('no db'));
+    mount();
+    await flush();
+    loop.runAgent.mockResolvedValue('');
+    document.querySelector<HTMLInputElement>('#goal')!.value = 'go';
+    submit();
+    await flush();
+    expect(loop.runAgent).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('asks to summarize after a quiet spell', async () => {
+    await seedDay();
+    vi.useFakeTimers();
+    mount();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(180000);
+    expect(document.querySelector<HTMLDialogElement>('#leave')!.open).toBe(true);
+  });
+
+  it('does not ask to summarize when nothing is behind', async () => {
+    await seedDay(false);
+    vi.useFakeTimers();
+    mount();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(180000);
+    expect(document.querySelector<HTMLDialogElement>('#leave')!.open).toBe(false);
+  });
+
+  it('does not open leave when it is already open', async () => {
+    await seedDay();
+    vi.useFakeTimers();
+    mount();
+    await vi.advanceTimersByTimeAsync(0);
+    const show = vi.spyOn(HTMLDialogElement.prototype, 'showModal');
+    document.querySelector<HTMLDialogElement>('#leave')!.open = true;
+    await vi.advanceTimersByTimeAsync(180000);
+    expect(show).not.toHaveBeenCalled();
+    show.mockRestore();
+  });
+
+  it('does not ask to leave during a run', async () => {
+    await seedDay();
+    vi.useFakeTimers();
+    mount();
+    await vi.advanceTimersByTimeAsync(0);
+    loop.runAgent.mockImplementation(() => new Promise(() => {}));
+    ready();
+    document.querySelector<HTMLInputElement>('#goal')!.value = 'go';
+    submit();
+    const show = vi.spyOn(HTMLDialogElement.prototype, 'showModal');
+    await vi.advanceTimersByTimeAsync(180000);
+    expect(show).not.toHaveBeenCalled();
+    show.mockRestore();
+  });
+});
+
+describe('pilot number fields', () => {
+  it('stores only positive integers', () => {
+    mount();
+    clickButton('#settings-open');
+    clickButton('#menu-model');
+    const input = field('contextTokens');
+    input.value = 'abc';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(readPilot().contextTokens).toBeNull();
+    input.value = '12.5';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(readPilot().contextTokens).toBeNull();
+    input.value = '4096';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(readPilot().contextTokens).toBe(4096);
+    input.value = '';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(readPilot().contextTokens).toBeNull();
   });
 });

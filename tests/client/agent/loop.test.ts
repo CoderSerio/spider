@@ -3,14 +3,14 @@ import type { SimSession } from '../../../src/shared/sim/session.js';
 
 const aiControl = vi.hoisted(() => ({
   streamText: vi.fn(),
-  isStepCount: vi.fn((count: number) => ({ steps: count })),
+  isLoopFinished: vi.fn(() => ({ until: 'finished' })),
   provider: null as null | ReturnType<typeof vi.fn>,
   providerOptions: null as null | Record<string, unknown>,
 }));
 
 vi.mock('ai', () => ({
   streamText: aiControl.streamText,
-  isStepCount: aiControl.isStepCount,
+  isLoopFinished: aiControl.isLoopFinished,
   tool: (config: unknown) => config,
 }));
 
@@ -106,11 +106,41 @@ describe('runAgent', () => {
     });
     expect(aiControl.provider!).toHaveBeenCalledWith('model-1');
     const options = aiControl.streamText.mock.calls[0][0] as Record<string, unknown>;
-    expect(options.prompt).toBe('go');
+    expect(options.messages).toEqual([{ role: 'user', content: 'go' }]);
     expect(String(options.system)).toContain('你是一个蜘蛛');
     expect(options.toolCallConcurrency).toBe(1);
-    expect(options.stopWhen).toEqual({ steps: 20 });
+    expect(options.stopWhen).toEqual({ until: 'finished' });
     expect(options.tools).toBeTypeOf('object');
+  });
+
+  it('adds the diary and an earlier summary to the system prompt', async () => {
+    stream([]);
+    await runAgent({
+      goal: 'go',
+      session: fakeSession(),
+      settings,
+      chat: { date: '2026-11-02', summary: '更早的事', turns: [], updatedAt: 1, digestedAt: 0 },
+      memoryIndex: '目录',
+      memory: { list: vi.fn(), get: vi.fn(), write: vi.fn() },
+    });
+    const system = String(aiControl.streamText.mock.calls[0][0].system);
+    expect(system).toContain('这一天更早的对话收成');
+    expect(system).toContain('目录');
+  });
+
+  it('omits the summary when the day has none yet', async () => {
+    stream([]);
+    await runAgent({
+      goal: 'go',
+      session: fakeSession(),
+      settings,
+      chat: { date: '2026-11-02', summary: '', turns: [], updatedAt: 1, digestedAt: 0 },
+      memoryIndex: '目录',
+      memory: { list: vi.fn(), get: vi.fn(), write: vi.fn() },
+    });
+    const system = String(aiControl.streamText.mock.calls[0][0].system);
+    expect(system).not.toContain('这一天更早的对话收成');
+    expect(system).toContain('目录');
   });
 
   it('cancels the session when the signal aborts', async () => {
