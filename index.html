@@ -15,6 +15,34 @@
     <p><kbd>R</kbd> 升高　<kbd>F</kbd> 降低</p>
     <p>拖动旋转视角　滚轮缩放</p>
   </aside>
+
+  <button id="settings-open" type="button">设置</button>
+  <ol id="trace" hidden></ol>
+  <form id="pilot">
+    <span id="pilot-model"></span>
+    <input id="goal" name="goal" type="text" autocomplete="off" placeholder="未填写模型，只能手工驾驶" />
+    <button id="pilot-send" type="submit">发送</button>
+  </form>
+
+  <dialog id="settings">
+    <form id="settings-form" method="dialog">
+      <h2>模型</h2>
+      <label>Base URL
+        <input name="baseURL" type="url" autocomplete="off" spellcheck="false" placeholder="https://api.deepseek.com/v1" />
+      </label>
+      <label>Model ID
+        <input name="model" type="text" autocomplete="off" spellcheck="false" placeholder="deepseek-chat" />
+      </label>
+      <label>API Key
+        <input name="apiKey" type="password" autocomplete="off" spellcheck="false" />
+      </label>
+      <p>填写后记在这台浏览器的 localStorage 里，刷新后还在。三项都留下才交给模型，留空就只手工驾驶。地址填到 /v1 为止。</p>
+      <menu>
+        <button id="settings-close" type="button" value="cancel">关闭</button>
+        <button type="submit" value="default">保存</button>
+      </menu>
+    </form>
+  </dialog>
 </main>
 <script type="module" src="/src/client/main.ts"></script>
 </body>

@@ -1,0 +1,217 @@
+import { pilotReady, readPilot, writePilot, type PilotSettings } from './settings.js';
+import type { Stage } from './stage.js';
+import type { SimSession } from '../shared/sim/session.js';
+
+const BUBBLE_MS = 5000;
+
+/** Settings, the instruction box, and the bubble that follows the spider. */
+export function mountPanel(doc: Document, session: SimSession, stage: Stage): void {
+  const form = doc.querySelector<HTMLFormElement>('#pilot');
+  const goal = doc.querySelector<HTMLInputElement>('#goal');
+  const send = doc.querySelector<HTMLButtonElement>('#pilot-send');
+  const model = doc.querySelector<HTMLElement>('#pilot-model');
+  const trace = doc.querySelector<HTMLOListElement>('#trace');
+  const open = doc.querySelector<HTMLButtonElement>('#settings-open');
+  const dialog = doc.querySelector<HTMLDialogElement>('#settings');
+  const settingsForm = doc.querySelector<HTMLFormElement>('#settings-form');
+  const close = doc.querySelector<HTMLButtonElement>('#settings-close');
+  if (!form || !goal || !send || !model || !trace || !open || !dialog || !settingsForm || !close) {
+    throw new Error('Missing pilot chrome');
+  }
+
+  let current: AbortController | null = null;
+  let live: HTMLLIElement | null = null;
+  let hideAt = 0;
+
+  const paint = (): void => {
+    const settings = readPilot();
+    const ready = pilotReady(settings);
+    model.textContent = ready ? settings.model : '';
+    goal.placeholder = ready ? '让它去做一件事' : '未填写模型，只能手工驾驶';
+  };
+
+  const touch = (): void => {
+    hideAt = performance.now() + BUBBLE_MS;
+  };
+
+  const show = (text: string, kind: string): void => {
+    const line = text.trim();
+    if (!line) return;
+    trace.replaceChildren();
+    live = doc.createElement('li');
+    live.dataset.kind = kind;
+    live.textContent = line;
+    trace.append(live);
+    touch();
+  };
+
+  const say = (chunk: string): void => {
+    if (!chunk) return;
+    if (live?.dataset.kind !== 'speech') {
+      trace.replaceChildren();
+      live = doc.createElement('li');
+      live.dataset.kind = 'speech';
+      live.textContent = '';
+      trace.append(live);
+    }
+    live.textContent = `${live.textContent ?? ''}${chunk}`;
+    touch();
+  };
+
+  const field = (name: string): HTMLInputElement => {
+    const element = settingsForm.elements.namedItem(name);
+    if (!(element instanceof HTMLInputElement)) throw new Error(`Missing settings field ${name}`);
+    return element;
+  };
+
+  const fill = (settings: PilotSettings): void => {
+    field('baseURL').value = settings.baseURL;
+    field('model').value = settings.model;
+    field('apiKey').value = settings.apiKey;
+  };
+
+  open.addEventListener('click', () => {
+    fill(readPilot());
+    dialog.showModal();
+  });
+  close.addEventListener('click', () => dialog.close());
+
+  const persist = (): void => {
+    writePilot({
+      baseURL: field('baseURL').value,
+      model: field('model').value,
+      apiKey: field('apiKey').value,
+    });
+    paint();
+  };
+
+  settingsForm.addEventListener('input', persist);
+  settingsForm.addEventListener('submit', persist);
+  dialog.addEventListener('close', persist);
+
+  const run = async (controller: AbortController, text: string, settings: PilotSettings): Promise<void> => {
+    let sawText = false;
+    try {
+      const { runAgent } = await import('./agent/loop.js');
+      const answer = await runAgent({
+        goal: text,
+        session,
+        settings,
+        signal: controller.signal,
+        onEvent(event) {
+          switch (event.type) {
+            case 'text':
+              sawText = true;
+              say(event.text);
+              break;
+            case 'tool-call':
+              show(thoughtOf(event.input), 'thought');
+              break;
+            case 'error':
+              show(explain(event.message), 'note');
+              break;
+            default:
+              break;
+          }
+        },
+      });
+      if (controller.signal.aborted) show('已停止', 'note');
+      else if (!sawText && answer.trim()) show(answer.trim(), 'speech');
+    } catch (error) {
+      if (controller.signal.aborted || isAbort(error)) show('已停止', 'note');
+      else show(explain(error instanceof Error ? error.message : String(error)), 'note');
+    } finally {
+      if (current === controller) {
+        current = null;
+        send.textContent = '发送';
+      }
+    }
+  };
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (current) {
+      current.abort();
+      return;
+    }
+
+    const settings = readPilot();
+    if (!pilotReady(settings)) {
+      show('还没有填写模型，现在只能手工驾驶', 'note');
+      fill(settings);
+      dialog.showModal();
+      return;
+    }
+
+    const text = goal.value.trim();
+    if (!text) return;
+
+    const controller = new AbortController();
+    current = controller;
+    send.textContent = '停止';
+    goal.value = '';
+    live = null;
+    hideAt = 0;
+    trace.replaceChildren();
+
+    void run(controller, text, settings);
+  });
+
+  let bubbleText = '';
+  let bubbleWidth = 0;
+  let bubbleHeight = 0;
+
+  stage.follow((point) => {
+    if (hideAt > 0 && performance.now() >= hideAt) {
+      trace.replaceChildren();
+      live = null;
+      hideAt = 0;
+    }
+    if (!point || trace.childElementCount === 0) {
+      trace.hidden = true;
+      return;
+    }
+    const text = trace.textContent ?? '';
+    if (trace.hidden || text !== bubbleText) {
+      trace.hidden = false;
+      bubbleWidth = trace.offsetWidth;
+      bubbleHeight = trace.offsetHeight;
+      bubbleText = text;
+    }
+    const width = bubbleWidth;
+    const height = bubbleHeight;
+    let left = point.x - width / 2;
+    let top = point.y - height - 16;
+    let tail = 'down';
+    if (top < 8) {
+      top = point.y + 16;
+      tail = 'up';
+    }
+    left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
+    top = Math.max(8, Math.min(top, window.innerHeight - height - 8));
+    trace.style.left = `${left}px`;
+    trace.style.top = `${top}px`;
+    const tailX = Math.max(14, Math.min(width - 14, point.x - left));
+    trace.style.setProperty('--tail', `${tailX}px`);
+    trace.dataset.tail = tail;
+  });
+
+  paint();
+}
+
+function thoughtOf(input: unknown): string {
+  if (!input || typeof input !== 'object' || !('description' in input)) return '';
+  const description = input.description;
+  return typeof description === 'string' ? description : '';
+}
+
+function isAbort(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+function explain(message: string): string {
+  if (message === 'Failed to fetch' || message.includes('Failed to fetch')) {
+    return '请求没有发出去。这个地址可能不允许浏览器跨域。';
+  }
+  return message;
+}

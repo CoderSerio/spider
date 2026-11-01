@@ -44,6 +44,10 @@ export interface SeenEntity extends EntityState {
 
 export interface Observation {
   time: number;
+  /** Look radius in units. Null means every entity was included. */
+  range: number | null;
+  /** Entities left out because they sit beyond range. */
+  beyond: number;
   self: {
     x: number;
     z: number;
@@ -74,10 +78,30 @@ export function toObservation(
   state: SpiderState,
   world: WorldState,
   reach: number,
+  within?: number,
 ): Observation {
   const heading = toHeading(state.yaw);
+  const seen: SeenEntity[] = [];
+  let beyond = 0;
+  for (const entity of world.entities) {
+    const dx = entity.x - state.position.x;
+    const dz = entity.z - state.position.z;
+    const distance = Math.hypot(dx, dz);
+    if (within != null && distance > within) {
+      beyond += 1;
+      continue;
+    }
+    seen.push({
+      ...entity,
+      distance: Number(distance.toFixed(3)),
+      bearing: Number(wrapDegrees((Math.atan2(dx, -dz) * 180) / Math.PI - heading).toFixed(1)),
+      inReach: distance <= reach,
+    });
+  }
   return {
     time: Number(state.time.toFixed(3)),
+    range: within ?? null,
+    beyond,
     self: {
       x: Number(state.position.x.toFixed(3)),
       z: Number(state.position.z.toFixed(3)),
@@ -88,16 +112,6 @@ export function toObservation(
         .map((foot, index) => (foot.y > GROUND_LIFT ? index : -1))
         .filter((index) => index >= 0),
     },
-    entities: world.entities.map((entity) => {
-      const dx = entity.x - state.position.x;
-      const dz = entity.z - state.position.z;
-      const distance = Math.hypot(dx, dz);
-      return {
-        ...entity,
-        distance: Number(distance.toFixed(3)),
-        bearing: Number(wrapDegrees((Math.atan2(dx, -dz) * 180) / Math.PI - heading).toFixed(1)),
-        inReach: distance <= reach,
-      };
-    }),
+    entities: seen,
   };
 }

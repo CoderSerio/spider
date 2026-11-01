@@ -3,6 +3,9 @@ import type { WorldState } from './state.js';
 /** How close the body must be to act on an entity. */
 export const REACH = 1.2;
 
+/** How far observe looks when the caller does not pass a distance. */
+export const VIEW_DISTANCE = 8;
+
 const APPLE_COUNT = 3;
 /** Apples stay inside this square, and away from the spider's spawn point. */
 const SPREAD = 7;

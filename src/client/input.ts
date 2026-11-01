@@ -2,7 +2,7 @@ import type { Controls } from '../shared/types.js';
 
 const NAV_KEYS = new Set(['ShiftLeft', 'ShiftRight']);
 
-/** Keyboard state, pushed to the server as it changes. The page is a viewer. */
+/** Keyboard state for the local simulation. Typing in the page chrome is left alone. */
 export class Input {
   #held = new Set<string>();
   readonly #target: Window;
@@ -35,6 +35,7 @@ export class Input {
   }
 
   #onKeyDown = (event: KeyboardEvent): void => {
+    if (Input.#typing(event)) return;
     this.#held.add(event.code);
     if (Input.#steers(event.code)) event.preventDefault();
     this.#onInput(this.#controls());
@@ -42,8 +43,15 @@ export class Input {
 
   #onKeyUp = (event: KeyboardEvent): void => {
     this.#held.delete(event.code);
+    if (Input.#typing(event)) return;
     this.#onInput(this.#controls());
   };
+
+  /** Forms and the settings dialog must receive letters, including W A S D. */
+  static #typing(event: KeyboardEvent): boolean {
+    const target = event.target;
+    return target instanceof Element && Boolean(target.closest('input, textarea, select, dialog'));
+  }
 
   static #steers(code: string): boolean {
     return code.startsWith('Arrow') || code.startsWith('Key') || NAV_KEYS.has(code);

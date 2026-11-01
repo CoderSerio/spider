@@ -1,4 +1,3 @@
-import { Spider } from '../../shared/sim/Spider.js';
 import {
   toHeading,
   toObservation,
@@ -6,10 +5,11 @@ import {
   type Observation,
   type SpiderState,
   type WorldState,
-} from '../../shared/state.js';
-import type { Controls } from '../../shared/types.js';
-import { createWorld, REACH } from '../../shared/world.js';
+} from '../state.js';
+import type { Controls } from '../types.js';
+import { createWorld, REACH, VIEW_DISTANCE } from '../world.js';
 import { heightGoal, turnGoal, walkGoal, type Goal } from './goals.js';
+import { Spider } from './Spider.js';
 
 const STEP = 1 / 60;
 const ZERO: Controls = { throttle: 0, turn: 0, lift: 0, boost: 0 };
@@ -28,8 +28,7 @@ interface ActiveGoal {
 }
 
 /**
- * Owns the authoritative simulation. It ticks on its own clock so the spider
- * keeps living whether or not a browser is watching.
+ * Owns the simulation. The page ticks it locally; nothing else is authoritative.
  */
 export class SimSession {
   readonly spider = new Spider();
@@ -59,12 +58,26 @@ export class SimSession {
     this.paused = paused;
   }
 
+  /** Drop the goal that currently owns the body, if one is running. */
+  cancel(): void {
+    const active = this.#active;
+    if (!active) return;
+    active.finish({ ok: false, reason: 'cancelled', ...active.goal.result() });
+  }
+
   snapshot(): { state: SpiderState; world: WorldState } {
     return { state: this.spider.capture(), world: this.world };
   }
 
-  observe(): Observation {
-    return toObservation(this.spider.capture(), this.world, REACH);
+  /** `all` includes every entity. A number is the look radius. The default is VIEW_DISTANCE. */
+  observe(distance: number | 'all' = VIEW_DISTANCE): Observation {
+    const within = distance === 'all' ? undefined : distance;
+    return toObservation(this.spider.capture(), this.world, REACH, within);
+  }
+
+  /** One visible frame. The page calls this from its render loop. */
+  frame(dt: number): void {
+    this.#step(Math.min(0.05, Math.max(0, dt)));
   }
 
   tick(): void {
@@ -104,8 +117,8 @@ export class SimSession {
     });
   }
 
-  walk(distance: number): Promise<GoalOutcome> {
-    return this.run(walkGoal(this.spider, distance));
+  walk(distance: number, fast = false): Promise<GoalOutcome> {
+    return this.run(walkGoal(this.spider, distance, fast));
   }
 
   turn(degrees: number): Promise<GoalOutcome> {
@@ -141,18 +154,18 @@ export class SimSession {
     return this.drive(seconds, {});
   }
 
-  async moveTo(x: number, z: number): Promise<GoalOutcome> {
+  async moveTo(x: number, z: number, fast = false): Promise<GoalOutcome> {
     const { x: x0, z: z0 } = this.spider.root.position;
     const distance = Math.hypot(x - x0, z - z0);
     const bearing = (Math.atan2(x - x0, -(z - z0)) * 180) / Math.PI;
     const turn = await this.turn(wrapDegrees(bearing - toHeading(this.spider.yaw)));
     if (!turn.ok) return { ...turn, ok: false, reason: `turn ${turn.reason}` };
-    const walk = await this.walk(distance);
+    const walk = await this.walk(distance, fast);
     return { ...walk, distance };
   }
 
   /** Walk to within `standoff` of an entity, facing it. */
-  async approach(id: string, standoff = REACH - 0.3): Promise<GoalOutcome> {
+  async approach(id: string, standoff = REACH - 0.3, fast = false): Promise<GoalOutcome> {
     const entity = this.world.entities.find((item) => item.id === id && !item.consumed);
     if (!entity) return { ok: false, reason: 'not-found', id };
 
@@ -163,7 +176,7 @@ export class SimSession {
     const bearing = (Math.atan2(entity.x - x, -(entity.z - z)) * 180) / Math.PI;
     const turn = await this.turn(wrapDegrees(bearing - toHeading(this.spider.yaw)));
     if (!turn.ok) return { ...turn, ok: false, reason: `turn ${turn.reason}` };
-    const walk = await this.walk(distance);
+    const walk = await this.walk(distance, fast);
     return { ...walk, id, distance };
   }
 
@@ -191,7 +204,7 @@ export class SimSession {
     return { ok: false, reason: 'not-interactable', id: closest.id };
   }
 
-  /** Drop a new prop into the world. Used by the page and by the agent. */
+  /** Drop a new prop into the world. */
   addEntity(kind: string, x: number, z: number): WorldState['entities'][number] {
     const sameKind = this.world.entities.filter((item) => item.kind === kind).length;
     const entity = { id: `${kind}-${sameKind + 1}`, kind, x, z, consumed: false };

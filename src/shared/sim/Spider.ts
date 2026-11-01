@@ -53,6 +53,10 @@ export class Spider {
 
   #head!: Group;
   #seeded = false;
+  /** Stays on while the body is still turning or walking, so feet are not glued mid-settle. */
+  #stepping = false;
+  /** How long the body has been fully still, in seconds. */
+  #stillFor = 0;
 
   constructor() {
     this.root.add(this.chassis);
@@ -89,7 +93,7 @@ export class Spider {
     this.chassis.rotation.x = -throttle * GAIT.pitch;
     this.chassis.rotation.z = this.yawRate * GAIT.roll;
 
-    this.#stepGait(throttle, turn, boost);
+    this.#stepGait(dt, throttle, turn, boost);
     this.#pose();
   }
 
@@ -189,17 +193,28 @@ export class Spider {
     this.root.position.z += worldFwd.z * this.speed * dt;
   }
 
-  #stepGait(throttle: number, turn: number, boost: number): void {
-    const moving = Math.abs(throttle) + Math.abs(turn) > 0.05 || Math.abs(this.speed) > 0.08;
-    const freq = moving ? (boost ? GAIT.freqBoost : GAIT.freq) : 0;
+  #stepGait(dt: number, throttle: number, turn: number, boost: number): void {
+    // A full turn (the key, or a large correction) steps. The AI's final trim is a
+    // small turn with almost no stride; treating that as walking makes the feet stamp.
+    const walking = Math.abs(throttle) > 0.05 || Math.abs(this.speed) > 0.1;
+    const hardTurn = Math.abs(turn) > 0.5 || Math.abs(this.yawRate) > 0.5;
+    const settled =
+      Math.abs(throttle) < 0.05 &&
+      Math.abs(this.speed) < 0.05 &&
+      Math.abs(turn) < 0.5 &&
+      Math.abs(this.yawRate) < 0.25;
+    if (walking || hardTurn) {
+      this.#stepping = true;
+      this.#stillFor = 0;
+    } else if (settled) this.#stepping = false;
+
+    const freq = this.#stepping ? (boost ? GAIT.freqBoost : GAIT.freq) : 0;
     const stride = freq > 0 ? this.speed * (GAIT.strideScale / freq) : 0;
+    if (freq === 0) this.#stillFor += dt;
 
     for (const leg of this.legs) {
       if (freq === 0) {
-        if (leg.lifted) leg.plant.copy(leg.foot);
-        leg.foot.copy(leg.plant);
-        leg.foot.y = GAIT.footY;
-        leg.lifted = false;
+        this.#idle(leg);
         continue;
       }
 
@@ -222,6 +237,22 @@ export class Spider {
       }
       leg.lifted = swing;
     }
+  }
+
+  /** A slow weight shift after the body has been still for a few seconds. */
+  #idle(leg: Leg): void {
+    const blend = Math.min(1, Math.max(0, (this.#stillFor - 4) / 1.5));
+    const sway = Math.sin(this.time * 0.55) * blend;
+    this.chassis.rotation.z = sway * 0.07;
+    this.chassis.rotation.x = Math.sin(this.time * 0.35) * 0.035 * blend;
+    this.#head.rotation.y = this.headYaw + Math.sin(this.time * 0.3) * 0.22 * blend;
+
+    this.#idealFoot(leg.plant, leg, 0);
+    leg.foot.copy(leg.plant);
+    leg.foot.y = GAIT.footY + Math.max(0, sway * leg.spec.side) * 0.07;
+    leg.swingFrom.copy(leg.plant);
+    leg.swingTo.copy(leg.plant);
+    leg.lifted = false;
   }
 
   #seedFeet(): void {
@@ -262,7 +293,7 @@ export class Spider {
 
     const points = [shoulderW, coxaW, kneeW, ankleW, leg.foot];
     for (let i = 0; i < leg.bones.length; i++) {
-      placeBone(leg.bones[i], points[i], points[i + 1], BONES[i].radius);
+      placeBone(leg.bones[i], points[i], points[i + 1], BONES[i].radius, leg.spec.side);
       leg.joints[i].position.copy(points[i]);
     }
     leg.claw.position.copy(leg.foot);
@@ -285,13 +316,19 @@ function bendJoint(a: Vector3, b: Vector3, len1: number, len2: number, pole: Vec
   out.copy(a).addScaledVector(reachW, cosA * len1).addScaledVector(axisX, sinA * len1);
 }
 
-function placeBone(group: Group, a: Vector3, b: Vector3, radius: number): void {
+function placeBone(group: Group, a: Vector3, b: Vector3, radius: number, side: number): void {
   reachW.subVectors(b, a);
   const dist = Math.max(0.02, reachW.length());
   reachW.multiplyScalar(1 / dist);
   axisZ.copy(reachW).negate();
-  axisX.crossVectors(UP, axisZ);
-  if (axisX.lengthSq() < 1e-8) axisX.set(1, 0, 0);
+  // Twist around the body's side, not world up. A near-vertical bone used to
+  // flip the tube's edges every frame, which reads as a ghost.
+  axisX.copy(worldRight).multiplyScalar(side);
+  axisX.addScaledVector(axisZ, -axisX.dot(axisZ));
+  if (axisX.lengthSq() < 1e-4) {
+    axisX.copy(UP).addScaledVector(axisZ, -UP.dot(axisZ));
+  }
+  if (axisX.lengthSq() < 1e-6) axisX.set(1, 0, 0);
   axisX.normalize();
   axisY.crossVectors(axisZ, axisX).normalize();
   basisM.makeBasis(axisX, axisY, axisZ);

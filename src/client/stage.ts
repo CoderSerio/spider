@@ -7,7 +7,6 @@ import {
   LineSegments,
   MathUtils,
   Mesh,
-  MeshBasicMaterial,
   PerspectiveCamera,
   Plane,
   Raycaster,
@@ -18,9 +17,10 @@ import {
   WebGLRenderer,
 } from 'three';
 import { PALETTE } from '../shared/config.js';
-import type { SnapshotMessage } from '../shared/protocol.js';
-import { Spider } from '../shared/sim/Spider.js';
-import { inkMat } from '../shared/sim/parts.js';
+import type { WorldState } from '../shared/state.js';
+import type { Spider } from '../shared/sim/Spider.js';
+import { createSound } from './sound.js';
+import { inkMat, paperMat } from '../shared/sim/parts.js';
 
 // Camera framing. Drag orbits, wheel dollies; both clamp at the same limits.
 const VIEW = {
@@ -47,20 +47,25 @@ const local = new Vector3();
 const look = new Vector3();
 const desired = new Vector3();
 const groundHit = new Vector3();
+const bubbleAt = new Vector3();
 const ndc = new Vector2();
 const groundPlane = new Plane(new Vector3(0, 1, 0), 0);
 const raycaster = new Raycaster();
 
-/** Renderer and camera. It mirrors whatever the server says; it never steps. */
+/** Renderer and camera. It steps the one spider, then paints that same spider. */
 export class Stage {
   readonly #host: HTMLElement;
   readonly #renderer: WebGLRenderer;
   readonly #scene = new Scene();
   readonly #camera: PerspectiveCamera;
-  readonly #spider = new Spider();
+  readonly #spider: Spider;
   readonly #grid = buildGrid();
   readonly #props = new Map<string, Group>();
   #resizeObserver!: ResizeObserver;
+  #view = { left: 0, top: 0, width: 1, height: 1 };
+  readonly #sound = createSound(window);
+  #heard = false;
+  readonly #wasLifted: boolean[] = [];
 
   #yaw: number = VIEW.yaw;
   #pitch: number = VIEW.pitch;
@@ -73,15 +78,21 @@ export class Stage {
   #placeMode = false;
   /** Called when the user clicks the ground while place mode is on. */
   onGroundClick: ((x: number, z: number) => void) | null = null;
+  /** Advance the one simulation, then read its world for the props. */
+  #step: ((dt: number) => void) | null = null;
+  #world: (() => WorldState) | null = null;
+  /** Screen point just above the body, for the speech bubble. */
+  #onAnchor: ((point: { x: number; y: number } | null) => void) | null = null;
   readonly #camPos = new Vector3();
   #camReady = false;
   #last = performance.now();
 
-  constructor(host: HTMLElement) {
+  constructor(host: HTMLElement, spider: Spider) {
     this.#host = host;
+    this.#spider = spider;
 
-    this.#renderer = new WebGLRenderer({ antialias: true });
-    this.#renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    this.#renderer = new WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    this.#renderer.setPixelRatio(Math.min(1.5, window.devicePixelRatio || 1));
     this.#renderer.setClearColor(PALETTE.paper, 1);
     host.appendChild(this.#renderer.domElement);
 
@@ -92,14 +103,26 @@ export class Stage {
     this.#resize();
   }
 
+  /** The render loop steps this once, then draws the same spider. */
+  bind(step: (dt: number) => void, world: () => WorldState): void {
+    this.#step = step;
+    this.#world = world;
+  }
+
+  /** Called after each paint with a point above the spider, in page pixels. */
+  follow(onAnchor: (point: { x: number; y: number } | null) => void): void {
+    this.#onAnchor = onAnchor;
+  }
+
   start(): void {
     this.#last = performance.now();
     this.#renderer.setAnimationLoop(this.#frame);
   }
 
-  apply(message: SnapshotMessage): void {
-    this.#spider.applyState(message.state);
-    for (const entity of message.world.entities) {
+  #syncWorld(): void {
+    const world = this.#world?.();
+    if (!world) return;
+    for (const entity of world.entities) {
       let prop = this.#props.get(entity.id);
       if (!prop) {
         const built = buildProp(entity.kind);
@@ -127,6 +150,7 @@ export class Stage {
     el.removeEventListener('pointermove', this.#onPointerMove);
     el.removeEventListener('wheel', this.#onWheel);
     this.#renderer.dispose();
+    this.#sound.dispose();
     el.remove();
   }
 
@@ -225,11 +249,16 @@ export class Stage {
     this.#renderer.setSize(w, h, false);
     this.#camera.aspect = w / h;
     this.#camera.updateProjectionMatrix();
+    const rect = this.#renderer.domElement.getBoundingClientRect();
+    this.#view = { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
   }
 
   #frame = (now: number): void => {
     const dt = Math.min(0.05, (now - this.#last) / 1000);
     this.#last = now;
+    this.#step?.(dt);
+    this.#syncWorld();
+    this.#feedback();
 
     // The grid follows the body in whole cells, so it reads as an endless floor.
     this.#grid.position.x = Math.round(this.#spider.root.position.x);
@@ -237,7 +266,44 @@ export class Stage {
 
     this.#placeCamera(dt);
     this.#renderer.render(this.#scene, this.#camera);
+    this.#onAnchor?.(this.#aboveSpider());
   };
+
+  /** One tick when any foot lands, and one when an apple disappears. */
+  #feedback(): void {
+    const legs = this.#spider.legs;
+    if (!this.#heard) {
+      for (let i = 0; i < legs.length; i++) this.#wasLifted[i] = legs[i].lifted;
+      this.#heard = true;
+      return;
+    }
+    let landed = false;
+    for (let i = 0; i < legs.length; i++) {
+      const lifted = legs[i].lifted;
+      if (this.#wasLifted[i] && !lifted) landed = true;
+      this.#wasLifted[i] = lifted;
+    }
+    if (landed) this.#sound.step();
+
+    for (const prop of this.#props.values()) {
+      if (prop.visible || prop.userData.heard) continue;
+      prop.userData.heard = true;
+      this.#sound.take();
+    }
+  }
+
+  /** A point above the shell, or null when it is behind the camera. */
+  #aboveSpider(): { x: number; y: number } | null {
+    bubbleAt.copy(this.#spider.root.position);
+    bubbleAt.y += 1.45;
+    bubbleAt.project(this.#camera);
+    if (bubbleAt.z > 1) return null;
+    const view = this.#view;
+    return {
+      x: view.left + (bubbleAt.x * 0.5 + 0.5) * view.width,
+      y: view.top + (-bubbleAt.y * 0.5 + 0.5) * view.height,
+    };
+  }
 }
 
 const APPLE_RADIUS = 0.34;
@@ -252,20 +318,14 @@ function buildProp(kind: string): Group | null {
 function buildApple(): Group {
   const apple = new Group();
 
-  const body = new Mesh(
-    new SphereGeometry(APPLE_RADIUS, 14, 10),
-    new MeshBasicMaterial({ color: 0xb4432f }),
-  );
-  body.add(new LineSegments(new EdgesGeometry(body.geometry, 20), inkMat));
+  const body = new Mesh(new SphereGeometry(APPLE_RADIUS, 12, 8), paperMat);
+  body.add(new LineSegments(new EdgesGeometry(body.geometry, 12), inkMat));
   apple.add(body);
 
-  const stem = new Mesh(
-    new CylinderGeometry(0.028, 0.022, 0.2, 6),
-    new MeshBasicMaterial({ color: 0x4a3b2a }),
-  );
+  const stem = new Mesh(new CylinderGeometry(0.028, 0.022, 0.2, 6), paperMat);
   stem.position.set(0.02, APPLE_RADIUS + 0.12, 0);
   stem.rotation.z = 0.18;
-  stem.add(new LineSegments(new EdgesGeometry(stem.geometry, 20), inkMat));
+  stem.add(new LineSegments(new EdgesGeometry(stem.geometry, 12), inkMat));
   apple.add(stem);
 
   apple.position.y = APPLE_REST_Y;

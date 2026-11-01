@@ -1,4 +1,4 @@
-import type { Spider } from '../../shared/sim/Spider.js';
+import type { Spider } from './Spider.js';
 import type { Controls } from '../../shared/types.js';
 
 /**
@@ -29,7 +29,7 @@ function forwardOf(spider: Spider): { x: number; z: number } {
 }
 
 /** Walk a signed distance along the current heading, decelerating into it. */
-export function walkGoal(spider: Spider, distance: number): Goal {
+export function walkGoal(spider: Spider, distance: number, fast = false): Goal {
   const sign = Math.sign(distance) || 1;
   const start = { x: spider.root.position.x, z: spider.root.position.z };
   const forward = forwardOf(spider);
@@ -42,10 +42,12 @@ export function walkGoal(spider: Spider, distance: number): Goal {
   };
 
   return {
-    timeout: Math.max(4, target / 1.2 + 3),
+    timeout: Math.max(4, target / (fast ? 2.4 : 1.2) + 3),
     controls() {
       const remaining = target - progress();
-      return { ...IDLE, throttle: clamp(remaining * 1.4, 0, 1) * sign };
+      // Fast holds full throttle until the last stride, so the body actually reaches a run.
+      const throttle = clamp(remaining / (fast ? 1.2 : 0.7), 0, 1) * sign;
+      return { ...IDLE, throttle, boost: fast ? 1 : 0 };
     },
     done() {
       return target - progress() <= 0.05 && Math.abs(spider.speed) < 0.2;

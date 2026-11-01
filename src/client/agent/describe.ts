@@ -8,7 +8,7 @@ const fmt = (value: number): string => (Math.abs(value) >= 10 ? value.toFixed(0)
 export function describeTool(name: string, input: Input): string {
   switch (name) {
     case 'observe':
-      return '观察四周';
+      return input?.distance == null ? '观察四周' : `观察 ${input.distance === 'all' ? '全部' : `${fmt(num(input.distance))} 格内`}`;
     case 'walk': {
       const distance = num(input?.distance);
       return distance >= 0 ? `前进 ${fmt(distance)} 格` : `后退 ${fmt(-distance)} 格`;
@@ -31,15 +31,13 @@ export function describeTool(name: string, input: Input): string {
       return `驱动 ${fmt(num(input?.seconds))} 秒`;
     case 'wait':
       return `等待 ${fmt(num(input?.seconds))} 秒`;
-    case 'plant_apple':
-      return `在 (${fmt(num(input?.x))}, ${fmt(num(input?.z))}) 种下苹果`;
     default:
       return name;
   }
 }
 
 export function describeResult(output: unknown): string {
-  const payload = extractPayload(output);
+  const payload = asRecord(output);
   if (!payload) return '完成';
   if (payload.ok === false) return `未完成 · ${String(payload.reason ?? '未知原因')}`;
   if (typeof payload.action === 'string' && typeof payload.target === 'string') {
@@ -49,24 +47,19 @@ export function describeResult(output: unknown): string {
     const target = typeof payload.target === 'number' ? ` / 目标 ${fmt(payload.target)}` : '';
     return `到位 · 实际 ${fmt(payload.achieved)}${target}`;
   }
+  const seen = asRecord(payload.observation);
+  if (seen && Array.isArray(seen.entities) && payload.action == null && payload.seconds == null && payload.distance == null) {
+    const count = seen.entities.length;
+    const beyond = num(seen.beyond);
+    if (count === 0 && beyond === 0) return '周围没有物体';
+    if (count === 0) return `范围内没有物体，更远处还有 ${beyond} 个`;
+    if (beyond > 0) return `看到 ${count} 个物体，更远处还有 ${beyond} 个`;
+    return `看到 ${count} 个物体`;
+  }
   return '完成';
 }
 
-/** MCP tool results arrive as { content: [{ type: 'text', text: '<json>' }] }. */
-function extractPayload(output: unknown): Record<string, unknown> | null {
+function asRecord(output: unknown): Record<string, unknown> | null {
   if (!output || typeof output !== 'object') return null;
-  const content = (output as { content?: unknown }).content;
-  if (!Array.isArray(content)) return null;
-  for (const part of content) {
-    if (part && typeof part === 'object' && (part as { type?: string }).type === 'text') {
-      const text = String((part as { text?: unknown }).text ?? '');
-      try {
-        const parsed: unknown = JSON.parse(text);
-        return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
-      } catch {
-        return null;
-      }
-    }
-  }
-  return null;
+  return output as Record<string, unknown>;
 }
