@@ -2,12 +2,15 @@ import {
   toHeading,
   toObservation,
   wrapDegrees,
+  type EntityState,
   type Observation,
   type SpiderState,
   type WorldState,
 } from '../state.js';
+import { kindOf, slicesOf } from '../kinds.js';
 import type { Controls } from '../types.js';
-import { createWorld, REACH, VIEW_DISTANCE } from '../world.js';
+import { createWorld, REACH, REACH_Y, VIEW_DISTANCE } from '../world.js';
+import { TERRAIN } from '../terrain.js';
 import { heightGoal, turnGoal, walkGoal, type Goal } from './goals.js';
 import { Spider } from './Spider.js';
 
@@ -32,8 +35,13 @@ interface ActiveGoal {
  */
 export class SimSession {
   readonly spider = new Spider();
-  readonly world: WorldState = createWorld();
+  readonly world: WorldState;
   paused = false;
+
+  constructor(seed?: number) {
+    this.world = createWorld(seed);
+    this.spider.bindGround((x, z) => this.world.terrain.height(x, z), TERRAIN.half - 1);
+  }
 
   #human: Controls = ZERO;
   #active: ActiveGoal | null = null;
@@ -166,7 +174,7 @@ export class SimSession {
 
   /** Walk to within `standoff` of an entity, facing it. */
   async approach(id: string, standoff = REACH - 0.3, fast = false): Promise<GoalOutcome> {
-    const entity = this.world.entities.find((item) => item.id === id && !item.consumed);
+    const entity = this.world.entities.find((item) => item.id === id);
     if (!entity) return { ok: false, reason: 'not-found', id };
 
     const { x, z } = this.spider.root.position;
@@ -181,35 +189,83 @@ export class SimSession {
   }
 
   /**
-   * The interaction key: act on whatever is nearby, the way F works in a game.
-   * Apples are eaten today; future kinds dispatch to their own effect here.
+   * Act on a nearby entity. The action takes the kind's duration.
+   * Finishing an apple removes it. Finishing a rest leaves the chair.
+   * Stopping early keeps the stage already reached.
    */
-  interact(id?: string): GoalOutcome {
-    const { x, z } = this.spider.root.position;
-    const candidates = this.world.entities.filter(
-      (item) => !item.consumed && (id ? item.id === id : true),
-    );
-    if (candidates.length === 0) return { ok: false, reason: 'nothing-to-interact' };
+  interact(id?: string): Promise<GoalOutcome> {
+    const { x, y, z } = this.spider.root.position;
+    const candidates = this.world.entities.filter((item) => (id ? item.id === id : true));
+    if (candidates.length === 0) {
+      return Promise.resolve({ ok: false, reason: id ? 'not-found' : 'nothing-to-interact', id });
+    }
 
     const closest = candidates.reduce((best, item) =>
       Math.hypot(item.x - x, item.z - z) < Math.hypot(best.x - x, best.z - z) ? item : best,
     );
     const distance = Math.hypot(closest.x - x, closest.z - z);
-    if (distance > REACH) return { ok: false, reason: 'out-of-reach', id: closest.id, distance };
-
-    if (closest.kind === 'apple') {
-      closest.consumed = true;
-      return { ok: true, action: 'eat', target: closest.id, distance };
+    const vertical = Math.abs(closest.y - y);
+    if (distance > REACH || vertical > REACH_Y) {
+      return Promise.resolve({ ok: false, reason: 'out-of-reach', id: closest.id, distance });
     }
-    return { ok: false, reason: 'not-interactable', id: closest.id };
+
+    const kind = kindOf(closest.kind);
+    if (!kind) return Promise.resolve({ ok: false, reason: 'not-interactable', id: closest.id });
+
+    const entity = closest;
+    const startedAt = this.spider.time;
+    const startStage = entity.stage;
+    const slices = slicesOf(kind);
+    const elapsed0 = slices === 0 ? 0 : (startStage * kind.duration) / slices;
+    const remaining = Math.max(0.05, kind.duration - elapsed0);
+
+    const elapsed = () => elapsed0 + (this.spider.time - startedAt);
+    const sync = (): number => {
+      const now = elapsed();
+      if (slices > 0 && this.world.entities.includes(entity)) {
+        const visual = Math.min(kind.stages, Math.floor(now / (kind.duration / slices)));
+        entity.stage = Math.max(entity.stage, visual);
+      }
+      return now;
+    };
+
+    return this.run({
+      timeout: remaining + 1,
+      controls: () => ZERO,
+      done: () => sync() >= kind.duration - 1e-4,
+      result: () => ({
+        action: kind.action,
+        target: entity.id,
+        stage: entity.stage,
+        removed: false,
+      }),
+    }).then((outcome) => {
+      if (!outcome.ok || !kind.removes) return { ...outcome, stage: entity.stage, removed: false };
+      const stage = entity.stage;
+      this.#remove(entity);
+      return { ...outcome, action: kind.action, target: entity.id, stage, removed: true };
+    });
   }
 
-  /** Drop a new prop into the world. */
+  /** Drop a new prop into the world, sitting on the ground. */
   addEntity(kind: string, x: number, z: number): WorldState['entities'][number] {
+    const spec = kindOf(kind);
     const sameKind = this.world.entities.filter((item) => item.kind === kind).length;
-    const entity = { id: `${kind}-${sameKind + 1}`, kind, x, z, consumed: false };
+    const entity = {
+      id: `${kind}-${sameKind + 1}`,
+      kind,
+      x,
+      y: this.world.terrain.height(x, z) + (spec?.rest ?? 0),
+      z,
+      stage: 0,
+    };
     this.world.entities.push(entity);
     return entity;
+  }
+
+  #remove(entity: EntityState): void {
+    const index = this.world.entities.indexOf(entity);
+    if (index >= 0) this.world.entities.splice(index, 1);
   }
 
   #step(dt: number): void {

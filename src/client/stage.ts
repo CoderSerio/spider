@@ -1,17 +1,10 @@
 import {
-  BufferGeometry,
-  CylinderGeometry,
-  EdgesGeometry,
   Group,
-  LineBasicMaterial,
-  LineSegments,
   MathUtils,
-  Mesh,
   PerspectiveCamera,
   Plane,
   Raycaster,
   Scene,
-  SphereGeometry,
   Vector2,
   Vector3,
   WebGLRenderer,
@@ -19,8 +12,9 @@ import {
 import { PALETTE } from '../shared/config.js';
 import type { WorldState } from '../shared/state.js';
 import type { Spider } from '../shared/sim/Spider.js';
+import { buildIsland } from './groundView.js';
+import { buildProp } from './props.js';
 import { createSound } from './sound.js';
-import { inkMat, paperMat } from '../shared/sim/parts.js';
 
 // Camera framing. Drag orbits, wheel dollies; both clamp at the same limits.
 const VIEW = {
@@ -41,8 +35,6 @@ const VIEW = {
   lookUp: 1.15,
 } as const;
 
-const GRID = { span: 40, step: 1, y: -0.001 } as const;
-
 const local = new Vector3();
 const look = new Vector3();
 const desired = new Vector3();
@@ -59,8 +51,10 @@ export class Stage {
   readonly #scene = new Scene();
   readonly #camera: PerspectiveCamera;
   readonly #spider: Spider;
-  readonly #grid = buildGrid();
   readonly #props = new Map<string, Group>();
+  #island: Group | null = null;
+  /** Last drawn action stage, so a new bite can make a sound. */
+  readonly #stages = new Map<string, number>();
   #resizeObserver!: ResizeObserver;
   #view = { left: 0, top: 0, width: 1, height: 1 };
   readonly #sound = createSound(window);
@@ -97,7 +91,7 @@ export class Stage {
     host.appendChild(this.#renderer.domElement);
 
     this.#camera = new PerspectiveCamera(VIEW.fov, 1, VIEW.near, VIEW.far);
-    this.#scene.add(this.#spider.root, this.#spider.rig, this.#grid);
+    this.#scene.add(this.#spider.root, this.#spider.rig);
 
     this.#bindEvents();
     this.#resize();
@@ -122,17 +116,39 @@ export class Stage {
   #syncWorld(): void {
     const world = this.#world?.();
     if (!world) return;
+    if (!this.#island) {
+      this.#island = buildIsland((x, z) => world.terrain.height(x, z));
+      this.#scene.add(this.#island);
+    }
+
+    const alive = new Set<string>();
     for (const entity of world.entities) {
+      alive.add(entity.id);
+      const previous = this.#stages.get(entity.id);
       let prop = this.#props.get(entity.id);
+      if (prop && previous !== entity.stage) {
+        this.#scene.remove(prop);
+        this.#props.delete(entity.id);
+        prop = undefined;
+        if (previous != null && entity.stage > previous) this.#sound.bite();
+      }
       if (!prop) {
-        const built = buildProp(entity.kind);
+        const built = buildProp(entity.kind, entity.stage);
         if (!built) continue;
         prop = built;
         this.#props.set(entity.id, prop);
         this.#scene.add(prop);
       }
-      prop.visible = !entity.consumed;
-      prop.position.set(entity.x, APPLE_REST_Y, entity.z);
+      this.#stages.set(entity.id, entity.stage);
+      prop.position.set(entity.x, entity.y, entity.z);
+    }
+
+    for (const [id, prop] of this.#props) {
+      if (alive.has(id)) continue;
+      this.#scene.remove(prop);
+      this.#props.delete(id);
+      this.#stages.delete(id);
+      this.#sound.take();
     }
   }
 
@@ -260,10 +276,6 @@ export class Stage {
     this.#syncWorld();
     this.#feedback();
 
-    // The grid follows the body in whole cells, so it reads as an endless floor.
-    this.#grid.position.x = Math.round(this.#spider.root.position.x);
-    this.#grid.position.z = Math.round(this.#spider.root.position.z);
-
     this.#placeCamera(dt);
     this.#renderer.render(this.#scene, this.#camera);
     this.#onAnchor?.(this.#aboveSpider());
@@ -284,12 +296,6 @@ export class Stage {
       this.#wasLifted[i] = lifted;
     }
     if (landed) this.#sound.step();
-
-    for (const prop of this.#props.values()) {
-      if (prop.visible || prop.userData.heard) continue;
-      prop.userData.heard = true;
-      this.#sound.take();
-    }
   }
 
   /** A point above the shell, or null when it is behind the camera. */
@@ -306,40 +312,4 @@ export class Stage {
   }
 }
 
-const APPLE_RADIUS = 0.34;
-const APPLE_REST_Y = APPLE_RADIUS;
 
-function buildProp(kind: string): Group | null {
-  if (kind !== 'apple') return null;
-
-  return buildApple();
-}
-
-function buildApple(): Group {
-  const apple = new Group();
-
-  const body = new Mesh(new SphereGeometry(APPLE_RADIUS, 12, 8), paperMat);
-  body.add(new LineSegments(new EdgesGeometry(body.geometry, 12), inkMat));
-  apple.add(body);
-
-  const stem = new Mesh(new CylinderGeometry(0.028, 0.022, 0.2, 6), paperMat);
-  stem.position.set(0.02, APPLE_RADIUS + 0.12, 0);
-  stem.rotation.z = 0.18;
-  stem.add(new LineSegments(new EdgesGeometry(stem.geometry, 12), inkMat));
-  apple.add(stem);
-
-  apple.position.y = APPLE_REST_Y;
-  return apple;
-}
-
-function buildGrid(): Group {
-  const group = new Group();
-  const ink = new LineBasicMaterial({ color: PALETTE.grid });
-  const points: Vector3[] = [];
-  for (let i = -GRID.span; i <= GRID.span; i += GRID.step) {
-    points.push(new Vector3(i, GRID.y, -GRID.span), new Vector3(i, GRID.y, GRID.span));
-    points.push(new Vector3(-GRID.span, GRID.y, i), new Vector3(GRID.span, GRID.y, i));
-  }
-  group.add(new LineSegments(new BufferGeometry().setFromPoints(points), ink));
-  return group;
-}

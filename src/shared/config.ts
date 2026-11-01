@@ -66,4 +66,10 @@ export const GAIT = {
   roll: 0.08,
   liftRate: 0.5,
   liftEase: 5,
+  /** Rise over run. Steeper ground stops the body instead of letting it climb a wall. */
+  maxSlope: 0.85,
+  fallAccel: 14,
+  fallMax: 8,
+  /** Gap above the support before the body falls instead of easing down. */
+  drop: 0.2,
 } as const;

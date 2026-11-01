@@ -15,7 +15,7 @@ export interface ToolResult extends GoalOutcome {
 const thought = z
   .string()
   .describe(
-    "One short first-person sentence in the user's language saying why you are doing this. It is shown beside the spider. State the intention, not coordinates or the tool name.",
+    'One short first-person sentence in the user\'s language saying what you are doing. It is shown beside you. Say what you are doing, not coordinates or the name of the action.',
   );
 
 function call<T extends z.ZodRawShape>(shape: T) {
@@ -31,8 +31,10 @@ export function spiderTools(session: SimSession) {
   return {
     observe: tool({
       description:
-        'Look without moving. Returns the body pose and entities inside the look radius, each with ' +
-        `distance, bearing, and whether it is within reach (${REACH} units). ` +
+        'Look without moving. Returns where you are and what is inside the look radius, each with ' +
+        `horizontal distance, bearing, y, stage, and whether it is within reach (${REACH} units across and close in height). ` +
+        'self.y is your height and self.ground is the ground under you. self.height is only how far you are lifted off that ground. ' +
+        'seed is the island. An entity that has left the world is absent. ' +
         `beyond counts entities outside that radius. Other tools use the default radius of ${VIEW_DISTANCE}.`,
       inputSchema: call({
         distance: z
@@ -46,7 +48,7 @@ export function spiderTools(session: SimSession) {
       description:
         'Walk a signed distance along the current heading and decelerate into it. ' +
         'Negative distances walk backwards. Set fast for anything longer than about 2 units, ' +
-        'or the body only creeps. Returns target and achieved distance.',
+        'or you only creep. Returns target and achieved distance.',
       inputSchema: call({
         distance: z.number().describe('Units along the current heading. Positive is forward.'),
         fast: z.boolean().optional().describe('True to run. Use it when the distance is more than about 2 units.'),
@@ -69,7 +71,8 @@ export function spiderTools(session: SimSession) {
     }),
     move_to: tool({
       description:
-        'Turn toward a world point, then walk to it. Set fast when the point is more than about 2 units away. ' +
+        'Turn toward a place on the ground, then walk there. You follow the ground on the way. ' +
+        'Set fast when the point is more than about 2 units away. A steep face stops the walk. ' +
         'Returns the walk result and the distance.',
       inputSchema: call({
         x: z.number().describe('Target x in units.'),
@@ -92,15 +95,18 @@ export function spiderTools(session: SimSession) {
     }),
     interact: tool({
       description:
-        'Act on the nearest entity, or the one named by id. Fails with out-of-reach when farther ' +
-        `than ${REACH} units. The result names the action and the target.`,
+        'Act on the nearest entity, or the one named by id. The action takes time and the result names it. ' +
+        'Eating an apple changes its stage, then removes it, so later observations do not list it. ' +
+        'Resting on a chair leaves the chair where it is. Stopping early keeps the stage already reached. ' +
+        `Fails with out-of-reach when farther than ${REACH} units or well above or below you.`,
       inputSchema: call({
         id: z.string().optional().describe('Entity id. Omit to use the nearest entity.'),
       }),
-      execute: async ({ id }) => finish(session.interact(id)),
+      execute: async ({ id }) => finish(await session.interact(id)),
     }),
     set_height: tool({
-      description: 'Move the deck to a height. Returns target and achieved height.',
+      description:
+        'Lift or lower yourself a little off the ground under you. This does not climb a hill. Returns target and achieved offset.',
       inputSchema: call({
         level: z.number().min(-0.35).max(0.7).describe('Target deck height.'),
       }),
@@ -108,7 +114,7 @@ export function spiderTools(session: SimSession) {
     }),
     drive: tool({
       description:
-        'Hold raw controls for a fixed time. Use this only when no goal tool can express the maneuver. Returns seconds.',
+        'Hold a direction for a few seconds. Use this only when no other action can say what you are doing. Returns seconds.',
       inputSchema: call({
         seconds: z.number().min(0).max(10).describe('How long to hold the controls, in seconds.'),
         throttle: z.number().min(-1).max(1).optional().describe('Forward 1, back -1. Default 0.'),
@@ -120,7 +126,7 @@ export function spiderTools(session: SimSession) {
         finish(await session.drive(seconds, { throttle, turn, lift, boost })),
     }),
     wait: tool({
-      description: 'Let time pass without steering. Returns seconds.',
+      description: 'Stay as you are while time passes. Returns seconds.',
       inputSchema: call({
         seconds: z.number().min(0).max(10).describe('How long to wait, in seconds.'),
       }),

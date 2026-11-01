@@ -11,6 +11,7 @@ import {
   type BufferGeometry,
 } from 'three';
 import { BONES, DECK_Y, GAIT, MOUNTS } from '../config.js';
+import { TERRAIN } from '../terrain.js';
 import type { SpiderState } from '../state.js';
 import type { Controls } from '../types.js';
 import { Leg } from './Leg.js';
@@ -50,9 +51,13 @@ export class Spider {
   heightSet = 0;
   speed = 0;
   time = 0;
+  /** Downward speed while the body is above the ground. */
+  fall = 0;
 
   #head!: Group;
   #seeded = false;
+  #ground: (x: number, z: number) => number = () => 0;
+  #limit = TERRAIN.half - 1;
   /** Stays on while the body is still turning or walking, so feet are not glued mid-settle. */
   #stepping = false;
   /** How long the body has been fully still, in seconds. */
@@ -62,6 +67,15 @@ export class Spider {
     this.root.add(this.chassis);
     const mounts = this.#buildBody();
     this.legs = MOUNTS.map((spec, index) => new Leg(this.rig, spec, mounts[index], index));
+    this.update(0, IDLE);
+  }
+
+  /** The ground the feet plant on. Reseeds the stance for the new surface. */
+  bindGround(ground: (x: number, z: number) => number, limit = TERRAIN.half - 1): void {
+    this.#ground = ground;
+    this.#limit = limit;
+    this.fall = 0;
+    this.#seeded = false;
     this.update(0, IDLE);
   }
 
@@ -89,11 +103,12 @@ export class Spider {
       GAIT.heightMin,
       GAIT.heightMax,
     );
-    this.root.position.y += (this.heightSet - this.root.position.y) * Math.min(1, GAIT.liftEase * dt);
+    this.#vertical(dt);
     this.chassis.rotation.x = -throttle * GAIT.pitch;
     this.chassis.rotation.z = this.yawRate * GAIT.roll;
 
     this.#stepGait(dt, throttle, turn, boost);
+    this.#applySlope();
     this.#pose();
   }
 
@@ -189,8 +204,48 @@ export class Spider {
     const cruise = boost ? GAIT.cruiseBoost : GAIT.cruise;
     this.speed += (throttle * cruise - this.speed) * (1 - Math.exp(-GAIT.speedEase * dt));
     this.#readAxes();
-    this.root.position.x += worldFwd.x * this.speed * dt;
-    this.root.position.z += worldFwd.z * this.speed * dt;
+    const stepX = worldFwd.x * this.speed * dt;
+    const stepZ = worldFwd.z * this.speed * dt;
+    const run = Math.hypot(stepX, stepZ);
+    if (run < 1e-6) return;
+    const x = this.root.position.x;
+    const z = this.root.position.z;
+    const nextX = MathUtils.clamp(x + stepX, -this.#limit, this.#limit);
+    const nextZ = MathUtils.clamp(z + stepZ, -this.#limit, this.#limit);
+    const rise = this.#ground(nextX, nextZ) - this.#ground(x, z);
+    if (rise > GAIT.maxSlope * run) {
+      this.speed = 0;
+      return;
+    }
+    this.root.position.x = nextX;
+    this.root.position.z = nextZ;
+  }
+
+  /** Ease onto the commanded deck height. A real drop falls. */
+  #vertical(dt: number): void {
+    const support = this.#support();
+    const gap = this.root.position.y - support;
+    if (gap > GAIT.drop) {
+      this.fall = Math.min(GAIT.fallMax, this.fall + GAIT.fallAccel * dt);
+      this.root.position.y = Math.max(support, this.root.position.y - this.fall * dt);
+      return;
+    }
+    this.fall = 0;
+    this.root.position.y += (support - this.root.position.y) * Math.min(1, GAIT.liftEase * dt);
+  }
+
+  #support(): number {
+    return this.#ground(this.root.position.x, this.root.position.z) + this.heightSet;
+  }
+
+  /** Tip the shell with the ground, on top of the gait's pitch and roll. */
+  #applySlope(): void {
+    const x = this.root.position.x;
+    const z = this.root.position.z;
+    const ahead = this.#ground(x + worldFwd.x * 0.8, z + worldFwd.z * 0.8) - this.#ground(x, z);
+    const side = this.#ground(x + worldRight.x * 0.8, z + worldRight.z * 0.8) - this.#ground(x, z);
+    this.chassis.rotation.x -= MathUtils.clamp(ahead / 0.8, -0.35, 0.35);
+    this.chassis.rotation.z -= MathUtils.clamp(side / 0.8, -0.25, 0.25);
   }
 
   #stepGait(dt: number, throttle: number, turn: number, boost: number): void {
@@ -228,7 +283,8 @@ export class Spider {
         const u = phase / GAIT.swing;
         const e = u * u * (3 - 2 * u);
         leg.foot.lerpVectors(leg.swingFrom, leg.swingTo, e);
-        leg.foot.y = GAIT.footY + Math.sin(Math.PI * u) * GAIT.swingLift;
+        const base = leg.swingFrom.y + (leg.swingTo.y - leg.swingFrom.y) * e;
+        leg.foot.y = base + Math.sin(Math.PI * u) * GAIT.swingLift;
       } else if (leg.lifted) {
         leg.plant.copy(leg.swingTo);
         leg.foot.copy(leg.plant);
@@ -249,7 +305,7 @@ export class Spider {
 
     this.#idealFoot(leg.plant, leg, 0);
     leg.foot.copy(leg.plant);
-    leg.foot.y = GAIT.footY + Math.max(0, sway * leg.spec.side) * 0.07;
+    leg.foot.y += Math.max(0, sway * leg.spec.side) * 0.07;
     leg.swingFrom.copy(leg.plant);
     leg.swingTo.copy(leg.plant);
     leg.lifted = false;
@@ -270,7 +326,8 @@ export class Spider {
     out.copy(this.root.position);
     out.addScaledVector(worldFwd, leg.spec.fore + stride);
     out.addScaledVector(worldRight, leg.spec.side * leg.spec.lateral);
-    out.y = GAIT.footY;
+    const airborne = this.root.position.y - this.#support() > GAIT.drop;
+    out.y = (airborne ? this.root.position.y : this.#ground(out.x, out.z)) + GAIT.footY;
   }
 
   #pose(): void {
@@ -287,7 +344,7 @@ export class Spider {
 
     coxaW.copy(shoulderW).addScaledVector(dirW, BONES[0].len);
     ankleW.copy(leg.foot).addScaledVector(dirW, -BONES[3].len * 0.75);
-    ankleW.y = Math.max(GAIT.footY + 0.08, leg.foot.y + 0.05);
+    ankleW.y = leg.foot.y + 0.08;
     poleW.copy(UP).addScaledVector(dirW, 0.45);
     bendJoint(coxaW, ankleW, BONES[1].len, BONES[2].len, poleW, kneeW);
 

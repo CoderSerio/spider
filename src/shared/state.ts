@@ -25,11 +25,16 @@ export interface EntityState {
   id: string;
   kind: string;
   x: number;
+  /** World height of the entity origin. An eaten apple is removed instead of kept here. */
+  y: number;
   z: number;
-  consumed: boolean;
+  /** How far an action has progressed. 0 is untouched. */
+  stage: number;
 }
 
 export interface WorldState {
+  seed: number;
+  terrain: { height(x: number, z: number): number };
   entities: EntityState[];
 }
 
@@ -44,15 +49,22 @@ export interface SeenEntity extends EntityState {
 
 export interface Observation {
   time: number;
+  /** Rebuilds this same island. */
+  seed: number;
   /** Look radius in units. Null means every entity was included. */
   range: number | null;
   /** Entities left out because they sit beyond range. */
   beyond: number;
   self: {
     x: number;
+    /** World height of the body. */
+    y: number;
     z: number;
+    /** Height of the ground under the body. */
+    ground: number;
     /** Degrees. 0 is world -Z, clockwise positive. */
     heading: number;
+    /** Deck offset above the local ground. */
     height: number;
     speed: number;
     /** Indices of legs off the ground right now. */
@@ -91,25 +103,32 @@ export function toObservation(
       beyond += 1;
       continue;
     }
+    const vertical = Math.abs(entity.y - state.position.y);
     seen.push({
       ...entity,
+      y: Number(entity.y.toFixed(3)),
+      stage: entity.stage,
       distance: Number(distance.toFixed(3)),
       bearing: Number(wrapDegrees((Math.atan2(dx, -dz) * 180) / Math.PI - heading).toFixed(1)),
-      inReach: distance <= reach,
+      inReach: distance <= reach && vertical <= 1.6,
     });
   }
+  const ground = world.terrain.height(state.position.x, state.position.z);
   return {
     time: Number(state.time.toFixed(3)),
+    seed: world.seed,
     range: within ?? null,
     beyond,
     self: {
       x: Number(state.position.x.toFixed(3)),
+      y: Number(state.position.y.toFixed(3)),
       z: Number(state.position.z.toFixed(3)),
+      ground: Number(ground.toFixed(3)),
       heading: Number(heading.toFixed(1)),
       height: Number(state.height.toFixed(3)),
       speed: Number(state.speed.toFixed(3)),
       legsLifting: state.feet
-        .map((foot, index) => (foot.y > GROUND_LIFT ? index : -1))
+        .map((foot, index) => (foot.y > world.terrain.height(foot.x, foot.z) + GROUND_LIFT ? index : -1))
         .filter((index) => index >= 0),
     },
     entities: seen,

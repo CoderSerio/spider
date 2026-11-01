@@ -31,6 +31,11 @@ export function createSound(target: EventTarget) {
     step(): void {
       blip(140 + Math.random() * 30, 0.045, 0.035);
     },
+    /** A bite into something that is still there. */
+    bite(): void {
+      blip(190, 0.05, 0.04);
+      window.setTimeout(() => blip(110, 0.05, 0.03), 45);
+    },
     /** Something was taken from the world. */
     take(): void {
       blip(420, 0.06, 0.04);
