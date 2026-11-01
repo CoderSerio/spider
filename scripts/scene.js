@@ -1,6 +1,5 @@
 import * as THREE from '../lib/three.module.js';
-import { OrbitControls } from '../lib/addons/controls/OrbitControls.js';
-import { createOctopus, updateOctopus } from './octopus.js';
+import { createWalker, stepWalker } from './octopus.js';
 import { state } from './state.js';
 
 const PAPER = 0xf3efe6;
@@ -12,44 +11,60 @@ export function mountScene(host) {
   host.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(32, 1, 0.08, 80);
+  const camera = new THREE.PerspectiveCamera(32, 1, 0.08, 200);
+  const walker = createWalker();
+  scene.add(walker.root);
+  scene.add(walker.rig);
+  const grid = floor();
+  scene.add(grid);
 
-  const octopus = createOctopus();
-  scene.add(octopus);
-  updateOctopus(octopus, 0, state.curl);
-  octopus.updateMatrixWorld(true);
+  // Orbit angles are an offset in the character frame, then applied with the
+  // same quaternion the body moves with. They are not a second heading.
+  let orbitYaw = Math.PI + 0.62;
+  let orbitPitch = 0.32;
+  let dist = 12.4;
+  let dragging = false;
+  let lastX = 0;
+  let lastY = 0;
 
-  const controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.08;
-  controls.autoRotate = true;
-  controls.autoRotateSpeed = 0.4;
-  controls.minPolarAngle = 0.2;
-  controls.maxPolarAngle = Math.PI * 0.92;
+  const el = renderer.domElement;
+  el.addEventListener('pointerdown', (event) => {
+    dragging = true;
+    lastX = event.clientX;
+    lastY = event.clientY;
+    el.setPointerCapture(event.pointerId);
+  });
+  el.addEventListener('pointerup', () => {
+    dragging = false;
+  });
+  el.addEventListener('pointermove', (event) => {
+    if (!dragging) return;
+    orbitYaw -= (event.clientX - lastX) * 0.005;
+    orbitPitch = THREE.MathUtils.clamp(orbitPitch + (event.clientY - lastY) * 0.004, 0.12, 1.15);
+    lastX = event.clientX;
+    lastY = event.clientY;
+  });
+  el.addEventListener('wheel', (event) => {
+    dist = THREE.MathUtils.clamp(dist * (1 + event.deltaY * 0.001), 6, 24);
+    event.preventDefault();
+  }, { passive: false });
 
-  const sphere = new THREE.Sphere();
-  const view = new THREE.Vector3(0.38, 0.22, 1).normalize();
+  const local = new THREE.Vector3();
+  const look = new THREE.Vector3();
 
-  function fit() {
-    new THREE.Box3().setFromObject(octopus).getBoundingSphere(sphere);
-    const vFov = THREE.MathUtils.degToRad(camera.fov);
-    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
-    const dist = Math.max(sphere.radius / Math.sin(vFov / 2), sphere.radius / Math.sin(hFov / 2)) * 1.18;
-    camera.position.copy(sphere.center).addScaledVector(view, dist);
-    controls.target.copy(sphere.center);
-    controls.minDistance = dist * 0.55;
-    controls.maxDistance = dist * 2.6;
-    controls.update();
+  function placeCamera() {
+    const c = Math.cos(orbitPitch);
+    local.set(
+      Math.sin(orbitYaw) * c * dist,
+      Math.sin(orbitPitch) * dist,
+      Math.cos(orbitYaw) * c * dist,
+    );
+    local.applyQuaternion(walker.root.quaternion);
+    camera.position.copy(walker.root.position).add(local);
+    look.copy(walker.root.position);
+    look.y += 1.65;
+    camera.lookAt(look);
   }
-
-  let resumeAt = 0;
-  controls.addEventListener('start', () => {
-    controls.autoRotate = false;
-    resumeAt = 0;
-  });
-  controls.addEventListener('end', () => {
-    resumeAt = performance.now() + 2800;
-  });
 
   function resize() {
     const w = host.clientWidth;
@@ -58,7 +73,6 @@ export function mountScene(host) {
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
-    fit();
   }
   resize();
   window.addEventListener('resize', resize);
@@ -68,17 +82,28 @@ export function mountScene(host) {
     requestAnimationFrame(frame);
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
-    if (!state.paused) state.time += dt;
-    if (resumeAt && now > resumeAt && !state.paused) {
-      controls.autoRotate = true;
-      resumeAt = 0;
+    if (!state.paused) {
+      state.time += dt;
+      stepWalker(walker, dt, state);
     }
-    controls.autoRotate = controls.autoRotate && !state.paused;
-    controls.update();
-    state.arm = updateOctopus(octopus, state.time, state.curl);
-    const offset = camera.position.clone().sub(controls.target);
-    state.azimuth = (Math.atan2(offset.x, offset.z) * 180) / Math.PI;
+    grid.position.x = Math.round(walker.root.position.x);
+    grid.position.z = Math.round(walker.root.position.z);
+    placeCamera();
     renderer.render(scene, camera);
   }
   requestAnimationFrame(frame);
+}
+
+function floor() {
+  const group = new THREE.Group();
+  const ink = new THREE.LineBasicMaterial({ color: 0xc8bfb2 });
+  const span = 40;
+  const step = 1;
+  const pts = [];
+  for (let i = -span; i <= span; i += step) {
+    pts.push(new THREE.Vector3(i, -0.001, -span), new THREE.Vector3(i, -0.001, span));
+    pts.push(new THREE.Vector3(-span, -0.001, i), new THREE.Vector3(span, -0.001, i));
+  }
+  group.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), ink));
+  return group;
 }

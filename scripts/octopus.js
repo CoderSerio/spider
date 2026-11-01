@@ -3,333 +3,428 @@ import * as THREE from '../lib/three.module.js';
 const PAPER = 0xf3efe6;
 const INK = 0x1b1714;
 
-const ARMS = [
-  { az: -2.55, droop: 0.58, curl: 0.18, sweep: 0.55, n: 6, len: 0.3, r: 0.075 },
-  { az: -1.75, droop: 0.66, curl: 0.22, sweep: 0.42, n: 7, len: 0.3, r: 0.09 },
-  { az: -1.0, droop: 0.74, curl: 0.16, sweep: 0.28, n: 7, len: 0.32, r: 0.1 },
-  { az: -0.34, droop: 0.86, curl: 0.08, sweep: 0.12, n: 7, len: 0.3, r: 0.11 },
-  { az: 0.36, droop: 0.84, curl: -0.08, sweep: -0.12, n: 7, len: 0.3, r: 0.11 },
-  { az: 1.05, droop: 0.72, curl: -0.18, sweep: -0.3, n: 7, len: 0.32, r: 0.1 },
-  { az: 1.8, droop: 0.64, curl: -0.24, sweep: -0.45, n: 7, len: 0.3, r: 0.088 },
-  { az: 2.55, droop: 0.56, curl: -0.16, sweep: -0.52, n: 6, len: 0.28, r: 0.072 },
+const UP = new THREE.Vector3(0, 1, 0);
+const SEGMENTS = 16;
+const CYCLE = 1.7;
+const DUTY = 0.55;
+const LIFT = 1.25;
+const KICK = 0.34;
+const FOOT_Y = 0.16;
+const TURN_RATE = 0.8;
+
+// Upper pair reaches forward, lower pair reaches back. Both leave the
+// spine harness and arch before they plant — the chord is much shorter
+// than the tentacle, so the slack becomes the arch.
+const MOUNTS = [
+  { x: -0.26, y: 1.72, z: 0.36, side: -1, fore: 1.2, lateral: 1.4, phase: 0.0, reach: 6.4, flare: 0.2, lift: 1 },
+  { x: 0.26, y: 1.72, z: 0.36, side: 1, fore: 1.2, lateral: 1.4, phase: 0.5, reach: 6.4, flare: 0.2, lift: 1 },
+  { x: -0.36, y: 1.2, z: 0.38, side: -1, fore: -0.35, lateral: 2.25, phase: 0.75, reach: 5.15, flare: 0.95, lift: 0.58 },
+  { x: 0.36, y: 1.2, z: 0.38, side: 1, fore: -0.35, lateral: 2.25, phase: 0.25, reach: 5.15, flare: 0.95, lift: 0.58 },
 ];
 
-function mantleRadius(y) {
-  const t = (y + 0.02) / 1.78;
-  const bell = Math.sin(Math.min(1, Math.max(0, t)) * Math.PI * 0.9);
-  const crown = t > 0.8 ? Math.max(0, (1 - t) / 0.2) : 1;
-  return 0.08 + bell * 0.98 * Math.max(0.15, crown);
-}
+// Unit cylinder along local −Z, from z = 0 to z = −1. Thicker at the root.
+const tubeGeo = new THREE.CylinderGeometry(0.9, 1, 1, 8);
+tubeGeo.rotateX(-Math.PI / 2);
+tubeGeo.translate(0, 0, -0.5);
+const tubeEdges = new THREE.EdgesGeometry(tubeGeo, 18);
 
-function armDirection(az, droop) {
-  const outward = new THREE.Vector3(Math.sin(az), 0, Math.cos(az));
-  return new THREE.Vector3(0, -1, 0).multiplyScalar(droop).add(outward.multiplyScalar(1 - droop)).normalize();
-}
+const ridgeGeo = new THREE.BoxGeometry(0.26, 0.2, 0.58);
+ridgeGeo.translate(0, 1.14, -0.5);
+const ridgeEdges = new THREE.EdgesGeometry(ridgeGeo, 1);
 
-export function createOctopus() {
+const collarGeo = new THREE.TorusGeometry(1, 0.2, 6, 14);
+const collarEdges = new THREE.EdgesGeometry(collarGeo, 16);
+
+const hubGeo = new THREE.CylinderGeometry(0.09, 0.12, 0.3, 8);
+hubGeo.rotateX(Math.PI / 2);
+hubGeo.translate(0, 0, 0.06);
+const hubEdges = new THREE.EdgesGeometry(hubGeo, 16);
+const yokeGeo = new THREE.BoxGeometry(0.1, 0.07, 0.08);
+yokeGeo.translate(0, 0.05, -0.02);
+const yokeEdges = new THREE.EdgesGeometry(yokeGeo, 1);
+const axleGeo = new THREE.CylinderGeometry(0.03, 0.03, 0.14, 6);
+axleGeo.rotateZ(Math.PI / 2);
+const axleEdges = new THREE.EdgesGeometry(axleGeo, 12);
+const proxGeo = new THREE.BoxGeometry(0.055, 0.05, 0.3);
+proxGeo.translate(0, 0, -0.15);
+const proxEdges = new THREE.EdgesGeometry(proxGeo, 1);
+const distGeo = new THREE.BoxGeometry(0.042, 0.038, 0.34);
+distGeo.translate(0, 0, -0.17);
+const distEdges = new THREE.EdgesGeometry(distGeo, 1);
+const tipGeo = new THREE.CylinderGeometry(0.008, 0.032, 0.32, 5);
+tipGeo.rotateX(-Math.PI / 2);
+tipGeo.translate(0, 0, -0.16);
+const tipEdges = new THREE.EdgesGeometry(tipGeo, 12);
+const knuckleGeo = new THREE.SphereGeometry(0.058, 7, 6);
+const knuckleEdges = new THREE.EdgesGeometry(knuckleGeo, 14);
+
+const turretGeo = new THREE.CylinderGeometry(0.055, 0.085, 0.16, 8);
+turretGeo.rotateX(Math.PI / 2);
+const turretEdges = new THREE.EdgesGeometry(turretGeo, 16);
+const ballGeo = new THREE.SphereGeometry(0.078, 8, 6);
+const ballEdges = new THREE.EdgesGeometry(ballGeo, 16);
+
+export function createWalker() {
   const paper = new THREE.MeshBasicMaterial({
     color: PAPER,
     polygonOffset: true,
     polygonOffsetFactor: 1,
     polygonOffsetUnits: 1,
   });
-  const inkMat = new THREE.LineBasicMaterial({ color: INK });
+  const ink = new THREE.LineBasicMaterial({ color: INK });
+
   const root = new THREE.Group();
-  const hinges = [];
-  const tips = [];
+  const chassis = new THREE.Group();
+  root.add(chassis);
+  buildBody(chassis, paper, ink);
 
-  root.add(mantle(paper, inkMat));
-  root.add(eye(paper, inkMat, 0.5, 1.05, 0.2));
-  root.add(eye(paper, inkMat, -0.72, 1.16, 0.12));
-  root.add(hatch(paper, inkMat));
-  root.add(siphon(paper, inkMat));
-  root.add(crown(paper, inkMat));
-  const beak = beakPair(paper, inkMat);
-  root.add(beak.group);
-  root.add(collar(paper, inkMat));
+  const rig = new THREE.Group();
+  const arms = MOUNTS.map((mount, index) => buildArm(rig, paper, ink, mount, index));
 
-  const gear = gearAt(inkMat);
-  root.add(gear);
-
-  for (let i = 0; i < ARMS.length; i++) {
-    const built = buildArm(ARMS[i], paper, inkMat, hinges);
-    built.root.userData.index = i;
-    root.add(built.root);
-    tips.push(built.tip);
-  }
-
-  root.userData.hinges = hinges;
-  root.userData.tips = tips;
-  root.userData.gear = gear;
-  root.userData.beakL = beak.left;
-  root.userData.beakR = beak.right;
-  root.userData.pupil = root.getObjectByName('pupil');
-  return root;
+  const walker = {
+    root,
+    chassis,
+    rig,
+    arms,
+    yaw: 0,
+    time: CYCLE * (DUTY + (1 - DUTY) * 0.5),
+    lens: chassis.getObjectByName('lens'),
+    stern: chassis.getObjectByName('stern'),
+  };
+  stepWalker(walker, 0, { speed: 1.15, turn: 0 });
+  return walker;
 }
 
-function addEdges(mesh, inkMat) {
-  const lines = new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry, 12), inkMat);
-  mesh.add(lines);
+function addSolid(parent, geo, ink, paper, x, y, z, rx = 0, ry = 0) {
+  const mesh = new THREE.Mesh(geo, paper);
+  mesh.position.set(x, y, z);
+  mesh.rotation.set(rx, ry, 0);
+  mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo, 18), ink));
+  parent.add(mesh);
   return mesh;
 }
 
-function mantle(paper, inkMat) {
-  const group = new THREE.Group();
-  const pts = [];
-  for (let i = 0; i <= 28; i++) {
-    const y = -0.02 + (1.74 * i) / 28;
-    pts.push(new THREE.Vector2(Math.max(0.02, mantleRadius(y)), y));
-  }
-  const shell = new THREE.Mesh(new THREE.LatheGeometry(pts, 40), paper);
-  group.add(shell);
+function buildBody(chassis, paper, ink) {
+  const solid = (geo, x, y, z, rx = 0, ry = 0) => addSolid(chassis, geo, ink, paper, x, y, z, rx, ry);
 
-  for (let i = 0; i < 7; i++) {
-    const y = 0.12 + i * 0.22;
-    group.add(ring(mantleRadius(y), y, inkMat));
+  solid(new THREE.CylinderGeometry(0.3, 0.34, 0.1, 8), 0, 0.58, 0.02);
+  solid(new THREE.CylinderGeometry(0.16, 0.22, 0.28, 8), 0, 0.74, 0.02);
+  solid(new THREE.CylinderGeometry(0.24, 0.18, 0.36, 8), 0, 1.04, 0.02);
+  for (let i = 0; i < 4; i++) {
+    solid(new THREE.TorusGeometry(0.27 - i * 0.012, 0.013, 4, 16), 0, 0.9 + i * 0.08, 0.02, Math.PI / 2);
   }
-  for (let k = 0; k < 8; k++) {
-    const az = (k / 8) * Math.PI * 2;
-    const line = [];
-    for (let i = 0; i <= 24; i++) {
-      const y = 0.02 + (1.66 * i) / 24;
-      const r = mantleRadius(y);
-      line.push(new THREE.Vector3(Math.sin(az) * r, y, Math.cos(az) * r));
+
+  solid(new THREE.BoxGeometry(0.66, 0.5, 0.38), 0, 1.48, -0.04);
+  solid(new THREE.BoxGeometry(0.08, 0.42, 0.05), 0, 1.48, -0.25);
+  solid(new THREE.BoxGeometry(0.9, 0.82, 0.1), 0, 1.5, 0.28);
+  solid(new THREE.BoxGeometry(0.1, 0.7, 0.07), 0, 1.5, 0.37);
+
+  solid(new THREE.CylinderGeometry(0.055, 0.055, 0.32, 8), -0.16, 1.92, 0.4);
+  solid(new THREE.CylinderGeometry(0.055, 0.055, 0.32, 8), 0.16, 1.92, 0.4);
+
+  solid(new THREE.BoxGeometry(0.36, 0.3, 0.34), 0, 1.96, -0.02);
+  solid(new THREE.BoxGeometry(0.42, 0.1, 0.14), 0, 1.98, -0.18);
+  solid(new THREE.TorusGeometry(0.16, 0.016, 4, 14), 0, 1.76, -0.02, Math.PI / 2);
+
+  const lens = solid(new THREE.CylinderGeometry(0.08, 0.1, 0.12, 8), 0, 1.94, -0.3, Math.PI / 2);
+  lens.name = 'lens';
+  const pupil = new THREE.Mesh(
+    new THREE.CircleGeometry(0.045, 12),
+    new THREE.MeshBasicMaterial({ color: INK }),
+  );
+  pupil.position.set(0, 1.94, -0.37);
+  pupil.rotation.y = Math.PI;
+  chassis.add(pupil);
+
+  const stern = new THREE.Object3D();
+  stern.name = 'stern';
+  stern.position.set(0, 1.5, 0.46);
+  chassis.add(stern);
+
+  for (let i = 0; i < MOUNTS.length; i++) {
+    const mount = MOUNTS[i];
+    const turret = new THREE.Mesh(turretGeo, paper);
+    turret.position.set(mount.x, mount.y, mount.z + 0.02);
+    turret.add(new THREE.LineSegments(turretEdges, ink));
+    chassis.add(turret);
+
+    const ball = new THREE.Mesh(ballGeo, paper);
+    ball.position.set(mount.x, mount.y, mount.z);
+    ball.add(new THREE.LineSegments(ballEdges, ink));
+    chassis.add(ball);
+
+    const anchor = new THREE.Object3D();
+    anchor.name = `mount-${i}`;
+    anchor.position.set(mount.x, mount.y, mount.z);
+    chassis.add(anchor);
+  }
+}
+
+function buildArm(rig, paper, ink, mount, index) {
+  const links = [];
+  const collars = [];
+  for (let i = 0; i < SEGMENTS; i++) {
+    const link = new THREE.Group();
+    const mesh = new THREE.Mesh(tubeGeo, paper);
+    mesh.add(new THREE.LineSegments(tubeEdges, ink));
+    link.add(mesh);
+    const ridge = new THREE.Mesh(ridgeGeo, paper);
+    ridge.add(new THREE.LineSegments(ridgeEdges, ink));
+    link.add(ridge);
+    rig.add(link);
+    links.push(link);
+
+    const collar = new THREE.Group();
+    const ring = new THREE.Mesh(collarGeo, paper);
+    ring.add(new THREE.LineSegments(collarEdges, ink));
+    collar.add(ring);
+    rig.add(collar);
+    collars.push(collar);
+  }
+
+  const claw = new THREE.Group();
+  const hub = new THREE.Mesh(hubGeo, paper);
+  hub.add(new THREE.LineSegments(hubEdges, ink));
+  claw.add(hub);
+
+  const digits = [];
+  for (let i = 0; i < 3; i++) {
+    const swivel = new THREE.Group();
+    swivel.rotation.z = (i / 3) * Math.PI * 2;
+    swivel.position.z = -0.06;
+    const yoke = new THREE.Mesh(yokeGeo, paper);
+    yoke.add(new THREE.LineSegments(yokeEdges, ink));
+    swivel.add(yoke);
+    const axle = new THREE.Mesh(axleGeo, paper);
+    axle.add(new THREE.LineSegments(axleEdges, ink));
+    swivel.add(axle);
+
+    const proximal = new THREE.Group();
+    const blade = new THREE.Mesh(proxGeo, paper);
+    blade.add(new THREE.LineSegments(proxEdges, ink));
+    proximal.add(blade);
+    swivel.add(proximal);
+
+    const mid = new THREE.Group();
+    mid.position.z = -0.3;
+    const knuckle = new THREE.Mesh(knuckleGeo, paper);
+    knuckle.add(new THREE.LineSegments(knuckleEdges, ink));
+    mid.add(knuckle);
+    const phalanx = new THREE.Mesh(distGeo, paper);
+    phalanx.add(new THREE.LineSegments(distEdges, ink));
+    mid.add(phalanx);
+
+    const hook = new THREE.Group();
+    hook.position.z = -0.34;
+    const talon = new THREE.Mesh(tipGeo, paper);
+    talon.add(new THREE.LineSegments(tipEdges, ink));
+    hook.add(talon);
+    mid.add(hook);
+
+    claw.add(swivel);
+    digits.push({ proximal, mid, hook });
+  }
+  rig.add(claw);
+
+  const hosePositions = new Float32Array((SEGMENTS + 1) * 3);
+  const hoseGeo = new THREE.BufferGeometry();
+  hoseGeo.setAttribute('position', new THREE.BufferAttribute(hosePositions, 3));
+  rig.add(new THREE.Line(hoseGeo, ink));
+
+  return {
+    index,
+    mount,
+    links,
+    collars,
+    claw,
+    digits,
+    hosePositions,
+    hoseGeo,
+    plant: new THREE.Vector3(),
+    swingFrom: new THREE.Vector3(),
+    foot: new THREE.Vector3(),
+    wasStance: true,
+    points: Array.from({ length: 5 }, () => new THREE.Vector3()),
+    samples: Array.from({ length: SEGMENTS + 1 }, () => new THREE.Vector3()),
+    curve: null,
+  };
+}
+
+const worldFwd = new THREE.Vector3();
+const worldRight = new THREE.Vector3();
+const shoulderW = new THREE.Vector3();
+const sideW = new THREE.Vector3();
+const backW = new THREE.Vector3();
+const midW = new THREE.Vector3();
+const reachW = new THREE.Vector3();
+const axisX = new THREE.Vector3();
+const axisY = new THREE.Vector3();
+const axisZ = new THREE.Vector3();
+const transport = new THREE.Vector3();
+const basisM = new THREE.Matrix4();
+
+export function stepWalker(walker, dt, control) {
+  const speed = control.speed;
+  const turn = control.turn;
+  walker.time += dt;
+  walker.yaw -= turn * TURN_RATE * dt;
+  walker.root.rotation.y = walker.yaw;
+
+  const stride = (walker.time / CYCLE) * Math.PI * 2;
+  walker.root.position.y = Math.sin(stride * 2) * 0.02;
+  walker.chassis.rotation.z = Math.sin(stride) * 0.045;
+  walker.chassis.rotation.x = Math.cos(stride * 2) * 0.02;
+  if (dt > 0) {
+    worldFwd.set(0, 0, -1).applyQuaternion(walker.root.quaternion);
+    walker.root.position.addScaledVector(worldFwd, speed * dt);
+  }
+  walker.root.updateMatrixWorld(true);
+
+  worldFwd.set(0, 0, -1).applyQuaternion(walker.root.quaternion);
+  worldRight.crossVectors(worldFwd, UP).normalize();
+
+  const stanceTravel = speed * DUTY * CYCLE;
+  const swingTravel = speed * (1 - DUTY) * CYCLE;
+
+  for (const arm of walker.arms) {
+    const phase = (((walker.time / CYCLE) + arm.mount.phase) % 1 + 1) % 1;
+    const inStance = phase < DUTY;
+    if (arm.plant.lengthSq() === 0) {
+      placeFoot(arm.plant, arm, worldFwd, worldRight, walker.root.position, 0);
+      arm.swingFrom.copy(arm.plant);
+      arm.wasStance = true;
     }
-    group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(line), inkMat));
+    if (inStance) {
+      arm.wasStance = true;
+      arm.foot.copy(arm.plant);
+      arm.foot.y = FOOT_Y;
+    } else {
+      if (arm.wasStance) {
+        arm.wasStance = false;
+        arm.swingFrom.copy(arm.plant);
+        placeFoot(arm.plant, arm, worldFwd, worldRight, walker.root.position, swingTravel + stanceTravel * 0.5);
+      }
+      const u = (phase - DUTY) / (1 - DUTY);
+      const e = u * u * (3 - 2 * u);
+      arm.foot.lerpVectors(arm.swingFrom, arm.plant, e);
+      arm.foot.y = FOOT_Y + Math.sin(Math.PI * u) * LIFT;
+      arm.foot.addScaledVector(worldRight, arm.mount.side * Math.sin(Math.PI * u) * KICK);
+    }
+    poseArm(walker, arm, inStance);
   }
-  return group;
 }
 
-function ring(radius, y, inkMat) {
-  const pts = [];
-  for (let i = 0; i < 64; i++) {
-    const a = (i / 64) * Math.PI * 2;
-    pts.push(new THREE.Vector3(Math.sin(a) * radius, y, Math.cos(a) * radius));
-  }
-  return new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), inkMat);
+function placeFoot(out, arm, fwdWorld, rightWorld, origin, ahead) {
+  out.copy(origin);
+  out.addScaledVector(fwdWorld, arm.mount.fore + ahead);
+  out.addScaledVector(rightWorld, arm.mount.side * arm.mount.lateral);
+  out.y = FOOT_Y;
 }
 
-function eye(paper, inkMat, az, y, scale) {
-  const r = mantleRadius(y);
-  const group = new THREE.Group();
-  group.position.set(Math.sin(az) * r, y, Math.cos(az) * r);
-  group.lookAt(Math.sin(az) * (r + 1), y, Math.cos(az) * (r + 1));
+function poseArm(walker, arm, planted) {
+  const mount = walker.chassis.getObjectByName(`mount-${arm.index}`);
+  mount.getWorldPosition(shoulderW);
+  sideW.set(arm.mount.side, 0, 0).applyQuaternion(walker.root.quaternion);
+  backW.set(0, 0, 1).applyQuaternion(walker.root.quaternion);
 
-  const housing = new THREE.Mesh(new THREE.CylinderGeometry(0.22 * scale / 0.2, 0.22 * scale / 0.2, 0.07, 12), paper);
-  housing.rotation.x = Math.PI / 2;
-  housing.position.z = 0.04;
-  group.add(addEdges(housing, inkMat));
+  const p = arm.points;
+  if (!arm.curve) arm.curve = new THREE.CatmullRomCurve3(p, false, 'centripetal');
 
-  group.add(circleLine(0.16 * (scale / 0.2), inkMat, 0.08));
-  group.add(circleLine(0.09 * (scale / 0.2), inkMat, 0.09));
+  let bow = 1.7;
+  const chord = Math.max(0.3, shoulderW.distanceTo(arm.foot));
+  const goal = Math.max(arm.mount.reach, chord + 0.85);
+  for (let k = 0; k < 5; k++) {
+    layoutArch(p, shoulderW, arm.foot, sideW, backW, bow, arm.mount);
+    arm.curve.updateArcLengths();
+    const len = arm.curve.getLength();
+    if (len < 0.05) break;
+    const next = THREE.MathUtils.clamp(bow * THREE.MathUtils.clamp(goal / len, 0.55, 1.55), 0.4, 2.6);
+    if (Math.abs(next - bow) < 0.02) {
+      bow = next;
+      break;
+    }
+    bow = next;
+  }
+  layoutArch(p, shoulderW, arm.foot, sideW, backW, bow, arm.mount);
+  arm.curve.updateArcLengths();
+  for (let i = 0; i <= SEGMENTS; i++) {
+    arm.curve.getPointAt(i / SEGMENTS, arm.samples[i]);
+  }
 
-  if (scale > 0.15) {
-    const pupil = new THREE.Mesh(
-      new THREE.BoxGeometry(0.09, 0.035, 0.02),
-      new THREE.MeshBasicMaterial({ color: INK }),
-    );
-    pupil.position.z = 0.1;
-    pupil.name = 'pupil';
-    group.add(pupil);
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2;
-      const bolt = new THREE.Mesh(new THREE.SphereGeometry(0.012, 6, 4), paper);
-      bolt.position.set(Math.cos(a) * 0.2, Math.sin(a) * 0.2, 0.08);
-      group.add(addEdges(bolt, inkMat));
+  // Seed the transport with the body's lateral axis so the ridge stays
+  // continuous when the tentacle passes through vertical.
+  transport.set(arm.mount.side, 0, 0).applyQuaternion(walker.root.quaternion);
+
+  for (let i = 0; i < SEGMENTS; i++) {
+    const a = arm.samples[i];
+    const b = arm.samples[i + 1];
+    reachW.subVectors(b, a);
+    const dist = Math.max(0.04, reachW.length());
+    reachW.multiplyScalar(1 / dist);
+
+    // Local −Z follows the tentacle. local +Z is the opposite direction.
+    axisZ.copy(reachW).negate();
+    axisX.copy(transport).addScaledVector(axisZ, -transport.dot(axisZ));
+    if (axisX.lengthSq() < 1e-8) {
+      axisX.set(0, 1, 0).addScaledVector(axisZ, -axisZ.y);
+      if (axisX.lengthSq() < 1e-8) axisX.set(1, 0, 0);
+    }
+    axisX.normalize();
+    axisY.crossVectors(axisZ, axisX).normalize();
+    transport.copy(axisX);
+    basisM.makeBasis(axisX, axisY, axisZ);
+
+    const t = i / (SEGMENTS - 1);
+    const radius = THREE.MathUtils.lerp(0.145, 0.048, Math.pow(t, 0.75));
+    const link = arm.links[i];
+    link.position.copy(a);
+    link.quaternion.setFromRotationMatrix(basisM);
+    link.scale.set(radius, radius, dist);
+
+    const collar = arm.collars[i];
+    const motor = i % 4 === 0;
+    collar.position.copy(a);
+    collar.quaternion.copy(link.quaternion);
+    collar.scale.setScalar(radius * (motor ? 1.42 : 1.16));
+    collar.visible = i !== SEGMENTS - 1;
+
+    const hose = arm.hosePositions;
+    const hoseR = radius * 1.55;
+    hose[i * 3] = a.x + axisX.x * hoseR;
+    hose[i * 3 + 1] = a.y + axisX.y * hoseR;
+    hose[i * 3 + 2] = a.z + axisX.z * hoseR;
+    if (i === SEGMENTS - 1) {
+      hose[(i + 1) * 3] = b.x + axisX.x * hoseR;
+      hose[(i + 1) * 3 + 1] = b.y + axisX.y * hoseR;
+      hose[(i + 1) * 3 + 2] = b.z + axisX.z * hoseR;
+      arm.claw.position.copy(b);
+      arm.claw.quaternion.copy(link.quaternion);
+      const spread = planted ? 0.62 : 1.15;
+      const curl = planted ? 1.2 : 0.7;
+      for (const digit of arm.digits) {
+        digit.proximal.rotation.x = spread;
+        digit.mid.rotation.x = curl;
+        digit.mid.rotation.z = 0.45;
+        digit.hook.rotation.x = 0.85;
+      }
     }
   }
-  return group;
+  arm.hoseGeo.attributes.position.needsUpdate = true;
+  arm.hoseGeo.computeBoundingSphere();
 }
 
-function circleLine(radius, inkMat, z) {
-  const pts = [];
-  for (let i = 0; i < 40; i++) {
-    const a = (i / 40) * Math.PI * 2;
-    pts.push(new THREE.Vector3(Math.cos(a) * radius, Math.sin(a) * radius, z));
-  }
-  return new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), inkMat);
+function layoutArch(p, shoulder, foot, side, back, bow, mount) {
+  // One hump along the chord. Lower arms stay wide and low so they
+  // don't climb through the upper pair.
+  const lift = mount.lift;
+  midW.lerpVectors(shoulder, foot, 0.5);
+  p[0].copy(shoulder);
+  p[1].copy(shoulder).addScaledVector(UP, bow * 0.26 * lift).addScaledVector(back, 0.14).addScaledVector(side, 0.3 + mount.flare * 0.2);
+  p[2].copy(midW).addScaledVector(UP, bow * lift).addScaledVector(side, 0.18 + mount.flare);
+  p[3].lerpVectors(shoulder, foot, 0.82).addScaledVector(UP, bow * 0.2 * lift).addScaledVector(side, 0.1);
+  p[4].copy(foot);
 }
 
-function gearAt(inkMat) {
-  const pts = [];
-  const teeth = 8;
-  const r = 0.07;
-  for (let i = 0; i < teeth; i++) {
-    const a0 = (i / teeth) * Math.PI * 2;
-    const step = (Math.PI * 2) / teeth;
-    pts.push(new THREE.Vector3(Math.cos(a0) * r, Math.sin(a0) * r, 0));
-    pts.push(new THREE.Vector3(Math.cos(a0 + step * 0.28) * (r + 0.025), Math.sin(a0 + step * 0.28) * (r + 0.025), 0));
-    pts.push(new THREE.Vector3(Math.cos(a0 + step * 0.55) * (r + 0.025), Math.sin(a0 + step * 0.55) * (r + 0.025), 0));
-    pts.push(new THREE.Vector3(Math.cos(a0 + step * 0.82) * r, Math.sin(a0 + step * 0.82) * r, 0));
-  }
-  const gear = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), inkMat);
-  const y = 0.78;
-  const rad = mantleRadius(y);
-  const az = 0.95;
-  gear.position.set(Math.sin(az) * rad, y, Math.cos(az) * rad);
-  gear.lookAt(Math.sin(az) * (rad + 1), y, Math.cos(az) * (rad + 1));
-  gear.position.add(new THREE.Vector3(Math.sin(az), 0, Math.cos(az)).multiplyScalar(0.06));
-  return gear;
-}
-
-function hatch(paper, inkMat) {
-  const y = 0.7;
-  const r = mantleRadius(y);
-  const az = 1.25;
-  const group = new THREE.Group();
-  group.position.set(Math.sin(az) * r, y, Math.cos(az) * r);
-  group.lookAt(Math.sin(az) * (r + 1), y, Math.cos(az) * (r + 1));
-  const door = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.32, 0.05), paper);
-  door.position.z = 0.04;
-  group.add(addEdges(door, inkMat));
-  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.12, 6), paper);
-  handle.rotation.z = Math.PI / 2;
-  handle.position.set(0.16, 0, 0.06);
-  group.add(addEdges(handle, inkMat));
-  return group;
-}
-
-function siphon(paper, inkMat) {
-  const group = new THREE.Group();
-  const samples = [];
-  for (let i = 0; i <= 7; i++) {
-    const u = i / 7;
-    const x = -0.35 - u * 0.85;
-    const y = 0.55 + Math.sin(u * Math.PI) * 0.28 - u * 0.15;
-    const z = 0.15 + u * 0.15;
-    samples.push(new THREE.Vector3(x, y, z));
-  }
-  for (let i = 0; i < samples.length - 1; i++) {
-    const a = samples[i];
-    const b = samples[i + 1];
-    const len = a.distanceTo(b);
-    const seg = new THREE.Group();
-    seg.position.copy(a);
-    seg.lookAt(b);
-    const radius = 0.055 - i * 0.004;
-    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius * 0.92, len, 6), paper);
-    mesh.rotation.x = Math.PI / 2;
-    mesh.position.z = len / 2;
-    seg.add(addEdges(mesh, inkMat));
-    group.add(seg);
-  }
-  return group;
-}
-
-function crown(paper, inkMat) {
-  const group = new THREE.Group();
-  const cap = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 8), paper);
-  cap.scale.set(1, 0.45, 1);
-  cap.position.y = 1.7;
-  group.add(addEdges(cap, inkMat));
-  for (const x of [-0.08, 0, 0.08]) {
-    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.1, 5), paper);
-    post.position.set(x, 1.82, 0);
-    group.add(addEdges(post, inkMat));
-  }
-  return group;
-}
-
-function beakPair(paper, inkMat) {
-  const group = new THREE.Group();
-  const left = jaw(paper, inkMat, -1);
-  const right = jaw(paper, inkMat, 1);
-  left.position.set(-0.02, 0.08, 0.42);
-  right.position.set(0.02, 0.08, 0.42);
-  group.add(left, right);
-  return { group, left, right };
-}
-
-function jaw(paper, inkMat, sign) {
-  const pivot = new THREE.Group();
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.05, 0.22), paper);
-  mesh.position.set(sign * 0.1, -0.02, 0.08);
-  pivot.add(addEdges(mesh, inkMat));
-  return pivot;
-}
-
-function collar(paper, inkMat) {
-  const mesh = new THREE.Mesh(new THREE.TorusGeometry(0.7, 0.028, 6, 36), paper);
-  mesh.rotation.x = Math.PI / 2;
-  mesh.position.y = 0.2;
-  mesh.scale.set(1.12, 0.86, 1);
-  return addEdges(mesh, inkMat);
-}
-
-function buildArm(spec, paper, inkMat, hinges) {
-  const root = new THREE.Group();
-  root.position.set(Math.sin(spec.az) * 0.72, 0.2, Math.cos(spec.az) * 0.56);
-  const dir = armDirection(spec.az, spec.droop);
-  root.lookAt(root.position.clone().sub(dir));
-
-  let parent = root;
-  let prevLen = 0;
-  for (let i = 0; i < spec.n; i++) {
-    const u = i / spec.n;
-    const r0 = spec.r * (1 - u * 0.8);
-    const r1 = Math.max(0.02, spec.r * (1 - ((i + 1) / spec.n) * 0.8));
-    const len = spec.len * (1 - u * 0.35);
-    const pivot = new THREE.Group();
-    if (i > 0) pivot.position.z = -prevLen;
-    parent.add(pivot);
-    pivot.add(makeLink(r0, r1, len, paper, inkMat));
-    if (i % 2 === 0) pivot.add(makeSucker(r0, len, paper, inkMat));
-    hinges.push({
-      pivot,
-      base: spec.curl * ((i + 1) / spec.n) ** 1.15,
-      sweep: spec.sweep * ((i + 1) / spec.n) ** 1.2,
-      gain: 0.25 + u * 0.55,
-      phase: spec.az * 1.7 + i * 0.55,
-    });
-    parent = pivot;
-    prevLen = len;
-  }
-  const tip = new THREE.Object3D();
-  tip.name = 'tip';
-  tip.position.z = -prevLen;
-  parent.add(tip);
-  return { root, tip };
-}
-
-function makeLink(r0, r1, len, paper, inkMat) {
-  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r0, r1, len, 6), paper);
-  mesh.rotation.x = Math.PI / 2;
-  mesh.position.z = -len / 2;
-  const group = new THREE.Group();
-  group.add(addEdges(mesh, inkMat));
-  const pin = new THREE.Mesh(new THREE.CylinderGeometry(r0 * 0.22, r0 * 0.22, r0 * 1.5, 6), paper);
-  pin.rotation.z = Math.PI / 2;
-  group.add(addEdges(pin, inkMat));
-  return group;
-}
-
-function makeSucker(r, len, paper, inkMat) {
-  const group = new THREE.Group();
-  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.42, r * 0.3, 0.04, 10), paper);
-  mesh.rotation.z = Math.PI / 2;
-  mesh.position.set(r + 0.045, 0, -len * 0.55);
-  group.add(addEdges(mesh, inkMat));
-  const hole = [];
-  for (let i = 0; i < 14; i++) {
-    const a = (i / 14) * Math.PI * 2;
-    hole.push(new THREE.Vector3(r + 0.07, Math.cos(a) * r * 0.2, -len * 0.55 + Math.sin(a) * r * 0.2));
-  }
-  group.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(hole), inkMat));
-  return group;
-}
-
-export function updateOctopus(root, time, curlBias) {
-  for (const hinge of root.userData.hinges) {
-    const wave = Math.sin(time * 0.75 + hinge.phase) * 0.06;
-    hinge.pivot.rotation.x = hinge.base + curlBias * hinge.gain + wave;
-    hinge.pivot.rotation.z = hinge.sweep;
-  }
-  root.userData.gear.rotation.z = time * 0.45;
-  const open = 0.35 + Math.sin(time * 0.9) * 0.12 + curlBias * 0.15;
-  root.userData.beakL.rotation.y = open;
-  root.userData.beakR.rotation.y = -open;
-  const pupil = root.userData.pupil;
-  if (pupil) pupil.scale.y = 0.65 + Math.sin(time * 1.3) * 0.35;
-  const lead = root.userData.hinges[20];
-  return lead ? (lead.pivot.rotation.x * 180) / Math.PI : 0;
+export function bodyForward(walker, out) {
+  return out.set(0, 0, -1).applyQuaternion(walker.root.quaternion);
 }
