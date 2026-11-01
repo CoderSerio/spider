@@ -2,15 +2,15 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "p5-art",
+      "name": "spider",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["dev"],
-      "port": 3000
+      "port": 5173
     },
     {
-      "name": "p5-art-attach",
-      "url": "http://localhost:3000",
-      "port": 3000
+      "name": "spider-attach",
+      "url": "http://localhost:5173",
+      "port": 5173
     }
   ]
 }
