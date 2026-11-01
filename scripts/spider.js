@@ -1,5 +1,7 @@
 import * as THREE from '../lib/three.module.js';
 
+// Mechanical spider: a cephalothorax on eight jointed legs, an abdomen hung
+// behind it, and an alternating tetrapod gait. Paper fills, ink edges.
 const PAPER = 0xf3efe6;
 const INK = 0x1b1714;
 
@@ -54,13 +56,13 @@ export function createWalker() {
   buildBody(chassis, paper, ink);
 
   const rig = new THREE.Group();
-  const arms = MOUNTS.map((mount, index) => buildLeg(rig, paper, ink, mount, index));
+  const legs = MOUNTS.map((mount, index) => buildLeg(rig, paper, ink, mount, index));
 
   const walker = {
     root,
     chassis,
     rig,
-    arms,
+    legs,
     yaw: 0,
     yawRate: 0,
     headYaw: 0,
@@ -228,81 +230,81 @@ export function stepWalker(walker, dt, control) {
   const moving = Math.abs(throttle) + Math.abs(turn) > 0.05 || Math.abs(walker.speed) > 0.08;
   const freq = moving ? (boost ? 1.65 : 1) : 0;
   const stride = freq > 0 ? walker.speed * (0.7 / freq) : 0;
-  for (const arm of walker.arms) {
+  for (const leg of walker.legs) {
     if (freq === 0) {
-      if (arm.lifted) arm.plant.copy(arm.foot);
-      arm.foot.copy(arm.plant);
-      arm.foot.y = FOOT_Y;
-      arm.lifted = false;
+      if (leg.lifted) leg.plant.copy(leg.foot);
+      leg.foot.copy(leg.plant);
+      leg.foot.y = FOOT_Y;
+      leg.lifted = false;
       continue;
     }
-    const phase = (walker.time * freq + arm.mount.phase) % 1;
+    const phase = (walker.time * freq + leg.mount.phase) % 1;
     const swing = phase < SWING;
-    if (swing && !arm.lifted) {
-      arm.swingFrom.copy(arm.plant);
-      idealFoot(arm.swingTo, arm, worldFwd, worldRight, walker.root.position, stride);
+    if (swing && !leg.lifted) {
+      leg.swingFrom.copy(leg.plant);
+      idealFoot(leg.swingTo, leg, worldFwd, worldRight, walker.root.position, stride);
     }
     if (swing) {
       const u = phase / SWING;
       const e = u * u * (3 - 2 * u);
-      arm.foot.lerpVectors(arm.swingFrom, arm.swingTo, e);
-      arm.foot.y = FOOT_Y + Math.sin(Math.PI * u) * 0.28;
-    } else if (arm.lifted) {
-      arm.plant.copy(arm.swingTo);
-      arm.foot.copy(arm.plant);
+      leg.foot.lerpVectors(leg.swingFrom, leg.swingTo, e);
+      leg.foot.y = FOOT_Y + Math.sin(Math.PI * u) * 0.28;
+    } else if (leg.lifted) {
+      leg.plant.copy(leg.swingTo);
+      leg.foot.copy(leg.plant);
     } else {
-      arm.foot.copy(arm.plant);
+      leg.foot.copy(leg.plant);
     }
-    arm.lifted = swing;
+    leg.lifted = swing;
   }
 
   poseAll(walker);
 }
 
 function seedFeet(walker) {
-  for (const arm of walker.arms) {
-    idealFoot(arm.plant, arm, worldFwd, worldRight, walker.root.position, 0);
-    arm.foot.copy(arm.plant);
-    arm.swingFrom.copy(arm.plant);
-    arm.swingTo.copy(arm.plant);
-    arm.lifted = false;
+  for (const leg of walker.legs) {
+    idealFoot(leg.plant, leg, worldFwd, worldRight, walker.root.position, 0);
+    leg.foot.copy(leg.plant);
+    leg.swingFrom.copy(leg.plant);
+    leg.swingTo.copy(leg.plant);
+    leg.lifted = false;
   }
   walker.seeded = true;
 }
 
-function idealFoot(out, arm, fwd, right, origin, stride) {
+function idealFoot(out, leg, fwd, right, origin, stride) {
   out.copy(origin);
-  out.addScaledVector(fwd, arm.mount.fore + stride);
-  out.addScaledVector(right, arm.mount.side * arm.mount.lateral);
+  out.addScaledVector(fwd, leg.mount.fore + stride);
+  out.addScaledVector(right, leg.mount.side * leg.mount.lateral);
   out.y = FOOT_Y;
 }
 
 function poseAll(walker) {
   walker.root.updateMatrixWorld(true);
-  for (const arm of walker.arms) poseLeg(walker, arm);
+  for (const leg of walker.legs) poseLeg(walker, leg);
 }
 
-function poseLeg(walker, arm) {
-  const mount = walker.chassis.getObjectByName(`mount-${arm.index}`);
+function poseLeg(walker, leg) {
+  const mount = walker.chassis.getObjectByName(`mount-${leg.index}`);
   mount.getWorldPosition(shoulderW);
-  dirW.subVectors(arm.foot, shoulderW);
+  dirW.subVectors(leg.foot, shoulderW);
   dirW.y = 0;
-  if (dirW.lengthSq() < 1e-6) dirW.set(arm.mount.x, 0, arm.mount.z);
+  if (dirW.lengthSq() < 1e-6) dirW.set(leg.mount.x, 0, leg.mount.z);
   dirW.normalize();
 
   coxaW.copy(shoulderW).addScaledVector(dirW, BONES[0].len);
-  ankleW.copy(arm.foot).addScaledVector(dirW, -BONES[3].len * 0.75);
-  ankleW.y = Math.max(FOOT_Y + 0.08, arm.foot.y + 0.05);
+  ankleW.copy(leg.foot).addScaledVector(dirW, -BONES[3].len * 0.75);
+  ankleW.y = Math.max(FOOT_Y + 0.08, leg.foot.y + 0.05);
   poleW.copy(UP).addScaledVector(dirW, 0.45);
   bendJoint(coxaW, ankleW, BONES[1].len, BONES[2].len, poleW, kneeW);
 
-  const points = [shoulderW, coxaW, kneeW, ankleW, arm.foot];
-  for (let i = 0; i < arm.bones.length; i++) {
-    placeBone(arm.bones[i], points[i], points[i + 1], BONES[i].radius);
-    arm.joints[i].position.copy(points[i]);
+  const points = [shoulderW, coxaW, kneeW, ankleW, leg.foot];
+  for (let i = 0; i < leg.bones.length; i++) {
+    placeBone(leg.bones[i], points[i], points[i + 1], BONES[i].radius);
+    leg.joints[i].position.copy(points[i]);
   }
-  arm.claw.position.copy(arm.foot);
-  arm.claw.quaternion.copy(arm.bones[3].quaternion);
+  leg.claw.position.copy(leg.foot);
+  leg.claw.quaternion.copy(leg.bones[3].quaternion);
 }
 
 function bendJoint(a, b, len1, len2, pole, out) {
@@ -332,8 +334,4 @@ function placeBone(group, a, b, radius) {
   group.position.copy(a);
   group.quaternion.setFromRotationMatrix(basisM);
   group.scale.set(radius, radius, dist);
-}
-
-export function bodyForward(walker, out) {
-  return out.set(0, 0, -1).applyQuaternion(walker.root.quaternion);
 }

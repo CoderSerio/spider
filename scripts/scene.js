@@ -1,5 +1,5 @@
 import * as THREE from '../lib/three.module.js';
-import { createWalker, stepWalker } from './octopus.js';
+import { createWalker, stepWalker } from './spider.js';
 import { state } from './state.js';
 
 const PAPER = 0xf3efe6;
