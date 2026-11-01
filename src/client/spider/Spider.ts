@@ -1,0 +1,267 @@
+import {
+  BoxGeometry,
+  CylinderGeometry,
+  Group,
+  LineSegments,
+  MathUtils,
+  Matrix4,
+  Mesh,
+  SphereGeometry,
+  Vector3,
+  type BufferGeometry,
+} from 'three';
+import { BONES, DECK_Y, GAIT, MOUNTS } from '../config';
+import type { Controls } from '../types';
+import { Leg } from './Leg';
+import { addSolid, ballEdges, ballGeo, inkMat, paperMat } from './parts';
+
+// Mechanical spider: a cephalothorax on eight jointed legs, an abdomen hung
+// behind it, and an alternating tetrapod gait.
+
+const UP = new Vector3(0, 1, 0);
+const IDLE: Controls = { throttle: 0, turn: 0, lift: 0, boost: 0 };
+
+// Scratch vectors: posing must not allocate per frame.
+const worldFwd = new Vector3();
+const worldRight = new Vector3();
+const shoulderW = new Vector3();
+const dirW = new Vector3();
+const coxaW = new Vector3();
+const kneeW = new Vector3();
+const ankleW = new Vector3();
+const poleW = new Vector3();
+const reachW = new Vector3();
+const axisX = new Vector3();
+const axisY = new Vector3();
+const axisZ = new Vector3();
+const basisM = new Matrix4();
+
+export class Spider {
+  readonly root = new Group();
+  /** The legs are solved and placed in world space, so rig is a sibling of root. */
+  readonly rig = new Group();
+  readonly chassis = new Group();
+
+  readonly legs: Leg[];
+  yaw = 0;
+  yawRate = 0;
+  headYaw = 0;
+  heightSet = 0;
+  speed = 0;
+  time = 0;
+
+  #head!: Group;
+  #seeded = false;
+
+  constructor() {
+    this.root.add(this.chassis);
+    const mounts = this.#buildBody();
+    this.legs = MOUNTS.map((spec, index) => new Leg(this.rig, spec, mounts[index], index));
+    this.update(0, IDLE);
+  }
+
+  update(dt: number, input: Controls = IDLE): void {
+    const throttle = input.throttle || 0;
+    const turn = input.turn || 0;
+    const lift = input.lift || 0;
+    const boost = input.boost ? 1 : 0;
+
+    this.root.rotation.y = this.yaw;
+    this.#readAxes();
+    if (!this.#seeded) this.#seedFeet();
+
+    if (dt <= 0) {
+      this.#pose();
+      return;
+    }
+
+    this.time += dt;
+    this.#steer(dt, turn, boost);
+    this.#drive(dt, throttle, boost);
+
+    this.heightSet = MathUtils.clamp(
+      this.heightSet + lift * GAIT.liftRate * dt,
+      GAIT.heightMin,
+      GAIT.heightMax,
+    );
+    this.root.position.y += (this.heightSet - this.root.position.y) * Math.min(1, GAIT.liftEase * dt);
+    this.chassis.rotation.x = -throttle * GAIT.pitch;
+    this.chassis.rotation.z = this.yawRate * GAIT.roll;
+
+    this.#stepGait(throttle, turn, boost);
+    this.#pose();
+  }
+
+  #buildBody(): Mesh[] {
+    const solid = (geo: BufferGeometry, x: number, y: number, z: number) =>
+      addSolid(this.chassis, geo, x, y, z);
+    const shell = (sx: number, sy: number, sz: number, x: number, y: number, z: number) => {
+      const geo = new SphereGeometry(1, 12, 8);
+      geo.scale(sx, sy, sz);
+      return solid(geo, x, y, z);
+    };
+
+    // Small cephalothorax, gap, then the abdomen. They do not share a volume.
+    shell(0.55, 0.18, 0.46, 0, DECK_Y, -0.12);
+    solid(new BoxGeometry(0.36, 0.03, 0.55), 0, DECK_Y + 0.16, -0.14);
+    const waist = new CylinderGeometry(0.1, 0.12, 0.22, 8);
+    waist.rotateX(Math.PI / 2);
+    solid(waist, 0, DECK_Y, 0.42);
+    shell(0.46, 0.32, 0.62, 0, DECK_Y + 0.06, 1.2);
+
+    const head = new Group();
+    head.position.set(0, DECK_Y + 0.02, -0.52);
+    this.chassis.add(head);
+    const eye = (x: number, y: number, r: number) => {
+      const geo = new CylinderGeometry(r, r, 0.05, 8);
+      geo.rotateX(Math.PI / 2);
+      return addSolid(head, geo, x, y, 0);
+    };
+    eye(-0.1, 0.05, 0.035);
+    eye(0.1, 0.05, 0.035);
+    eye(-0.05, -0.02, 0.022);
+    eye(0.05, -0.02, 0.022);
+    this.#head = head;
+
+    return MOUNTS.map((spec) => {
+      const ball = new Mesh(ballGeo, paperMat);
+      ball.scale.setScalar(0.06);
+      ball.position.set(spec.x, spec.y, spec.z);
+      ball.add(new LineSegments(ballEdges, inkMat));
+      this.chassis.add(ball);
+      return ball;
+    });
+  }
+
+  #readAxes(): void {
+    worldFwd.set(0, 0, -1).applyQuaternion(this.root.quaternion);
+    worldRight.crossVectors(worldFwd, UP).normalize();
+  }
+
+  #steer(dt: number, turn: number, boost: number): void {
+    const yawTarget = turn * (boost ? GAIT.yawBoost : GAIT.yaw);
+    this.yawRate += MathUtils.clamp(yawTarget - this.yawRate, -GAIT.yawAccel * dt, GAIT.yawAccel * dt);
+    this.yaw -= this.yawRate * dt;
+    this.root.rotation.y = this.yaw;
+    this.headYaw += (-turn * GAIT.headYaw - this.headYaw) * (1 - Math.exp(-GAIT.headEase * dt));
+    this.#head.rotation.y = this.headYaw;
+  }
+
+  #drive(dt: number, throttle: number, boost: number): void {
+    const cruise = boost ? GAIT.cruiseBoost : GAIT.cruise;
+    this.speed += (throttle * cruise - this.speed) * (1 - Math.exp(-GAIT.speedEase * dt));
+    this.#readAxes();
+    this.root.position.x += worldFwd.x * this.speed * dt;
+    this.root.position.z += worldFwd.z * this.speed * dt;
+  }
+
+  #stepGait(throttle: number, turn: number, boost: number): void {
+    const moving = Math.abs(throttle) + Math.abs(turn) > 0.05 || Math.abs(this.speed) > 0.08;
+    const freq = moving ? (boost ? GAIT.freqBoost : GAIT.freq) : 0;
+    const stride = freq > 0 ? this.speed * (GAIT.strideScale / freq) : 0;
+
+    for (const leg of this.legs) {
+      if (freq === 0) {
+        if (leg.lifted) leg.plant.copy(leg.foot);
+        leg.foot.copy(leg.plant);
+        leg.foot.y = GAIT.footY;
+        leg.lifted = false;
+        continue;
+      }
+
+      const phase = (this.time * freq + leg.spec.phase) % 1;
+      const swing = phase < GAIT.swing;
+      if (swing && !leg.lifted) {
+        leg.swingFrom.copy(leg.plant);
+        this.#idealFoot(leg.swingTo, leg, stride);
+      }
+      if (swing) {
+        const u = phase / GAIT.swing;
+        const e = u * u * (3 - 2 * u);
+        leg.foot.lerpVectors(leg.swingFrom, leg.swingTo, e);
+        leg.foot.y = GAIT.footY + Math.sin(Math.PI * u) * GAIT.swingLift;
+      } else if (leg.lifted) {
+        leg.plant.copy(leg.swingTo);
+        leg.foot.copy(leg.plant);
+      } else {
+        leg.foot.copy(leg.plant);
+      }
+      leg.lifted = swing;
+    }
+  }
+
+  #seedFeet(): void {
+    for (const leg of this.legs) {
+      this.#idealFoot(leg.plant, leg, 0);
+      leg.foot.copy(leg.plant);
+      leg.swingFrom.copy(leg.plant);
+      leg.swingTo.copy(leg.plant);
+      leg.lifted = false;
+    }
+    this.#seeded = true;
+  }
+
+  #idealFoot(out: Vector3, leg: Leg, stride: number): void {
+    out.copy(this.root.position);
+    out.addScaledVector(worldFwd, leg.spec.fore + stride);
+    out.addScaledVector(worldRight, leg.spec.side * leg.spec.lateral);
+    out.y = GAIT.footY;
+  }
+
+  #pose(): void {
+    this.root.updateMatrixWorld(true);
+    for (const leg of this.legs) this.#poseLeg(leg);
+  }
+
+  #poseLeg(leg: Leg): void {
+    shoulderW.setFromMatrixPosition(leg.mount.matrixWorld);
+    dirW.subVectors(leg.foot, shoulderW);
+    dirW.y = 0;
+    if (dirW.lengthSq() < 1e-6) dirW.set(leg.spec.x, 0, leg.spec.z);
+    dirW.normalize();
+
+    coxaW.copy(shoulderW).addScaledVector(dirW, BONES[0].len);
+    ankleW.copy(leg.foot).addScaledVector(dirW, -BONES[3].len * 0.75);
+    ankleW.y = Math.max(GAIT.footY + 0.08, leg.foot.y + 0.05);
+    poleW.copy(UP).addScaledVector(dirW, 0.45);
+    bendJoint(coxaW, ankleW, BONES[1].len, BONES[2].len, poleW, kneeW);
+
+    const points = [shoulderW, coxaW, kneeW, ankleW, leg.foot];
+    for (let i = 0; i < leg.bones.length; i++) {
+      placeBone(leg.bones[i], points[i], points[i + 1], BONES[i].radius);
+      leg.joints[i].position.copy(points[i]);
+    }
+    leg.claw.position.copy(leg.foot);
+    leg.claw.quaternion.copy(leg.bones[3].quaternion);
+  }
+}
+
+/** Two-bone IK: the knee sits at len1 along the reach, lifted toward the pole. */
+function bendJoint(a: Vector3, b: Vector3, len1: number, len2: number, pole: Vector3, out: Vector3): void {
+  reachW.subVectors(b, a);
+  const raw = reachW.length();
+  const dist = MathUtils.clamp(raw, Math.abs(len1 - len2) + 0.04, len1 + len2 - 0.04);
+  if (raw > 1e-5) reachW.multiplyScalar(1 / raw);
+  else reachW.set(0, 0, -1);
+  const cosA = MathUtils.clamp((len1 * len1 + dist * dist - len2 * len2) / (2 * len1 * dist), -1, 1);
+  const sinA = Math.sqrt(Math.max(0, 1 - cosA * cosA));
+  axisX.copy(pole).addScaledVector(reachW, -pole.dot(reachW));
+  if (axisX.lengthSq() < 1e-8) axisX.set(1, 0, 0);
+  axisX.normalize();
+  out.copy(a).addScaledVector(reachW, cosA * len1).addScaledVector(axisX, sinA * len1);
+}
+
+function placeBone(group: Group, a: Vector3, b: Vector3, radius: number): void {
+  reachW.subVectors(b, a);
+  const dist = Math.max(0.02, reachW.length());
+  reachW.multiplyScalar(1 / dist);
+  axisZ.copy(reachW).negate();
+  axisX.crossVectors(UP, axisZ);
+  if (axisX.lengthSq() < 1e-8) axisX.set(1, 0, 0);
+  axisX.normalize();
+  axisY.crossVectors(axisZ, axisX).normalize();
+  basisM.makeBasis(axisX, axisY, axisZ);
+  group.position.copy(a);
+  group.quaternion.setFromRotationMatrix(basisM);
+  group.scale.set(radius, radius, dist);
+}

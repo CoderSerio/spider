@@ -3,9 +3,9 @@
   "configurations": [
     {
       "name": "p5-art",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8123"],
-      "port": 8123
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["dev:client"],
+      "port": 5173
     }
   ]
 }

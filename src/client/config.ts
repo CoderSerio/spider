@@ -1,15 +1,27 @@
-// Single source of truth for the spider's palette and proportions.
+/** Single source of truth for the spider's palette and proportions. */
 
 export const PALETTE = {
   paper: 0xf3efe6,
   ink: 0x1b1714,
   grid: 0xc8bfb2,
-};
+} as const;
 
 export const DECK_Y = 0.78;
 
-// Eight legs on the cephalothorax. Same phase lifts one tetrapod.
-export const MOUNTS = [
+export interface MountSpec {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  /** -1 for the left side, 1 for the right. */
+  readonly side: number;
+  readonly fore: number;
+  readonly lateral: number;
+  /** 0 or 0.5, so one tetrapod lifts while the other plants. */
+  readonly phase: number;
+}
+
+/** Eight legs on the cephalothorax. Same phase lifts one tetrapod. */
+export const MOUNTS: readonly MountSpec[] = [
   { x: -0.22, y: DECK_Y, z: -0.42, side: -1, fore: 1.55, lateral: 0.95, phase: 0 },
   { x: 0.22, y: DECK_Y, z: -0.42, side: 1, fore: 1.55, lateral: 0.95, phase: 0.5 },
   { x: -0.4, y: DECK_Y, z: -0.16, side: -1, fore: 0.55, lateral: 1.55, phase: 0.5 },
@@ -20,8 +32,13 @@ export const MOUNTS = [
   { x: 0.24, y: DECK_Y, z: 0.32, side: 1, fore: -1.05, lateral: 1.2, phase: 0 },
 ];
 
-// Four segments per leg, from the shoulder out to the claw.
-export const BONES = [
+export interface BoneSpec {
+  readonly len: number;
+  readonly radius: number;
+}
+
+/** Four segments per leg, from the shoulder out to the claw. */
+export const BONES: readonly BoneSpec[] = [
   { len: 0.34, radius: 0.07 },
   { len: 0.86, radius: 0.055 },
   { len: 0.98, radius: 0.04 },
@@ -49,4 +66,4 @@ export const GAIT = {
   roll: 0.08,
   liftRate: 0.5,
   liftEase: 5,
-};
+} as const;

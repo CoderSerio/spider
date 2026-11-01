@@ -1,6 +1,17 @@
-import * as THREE from '../lib/three.module.js';
-import { PALETTE } from './config.js';
-import { Spider } from './spider.js';
+import {
+  BufferGeometry,
+  Group,
+  LineBasicMaterial,
+  LineSegments,
+  MathUtils,
+  PerspectiveCamera,
+  Scene,
+  Vector3,
+  WebGLRenderer,
+} from 'three';
+import { PALETTE } from './config';
+import type { Input } from './input';
+import { Spider } from './spider/Spider';
 
 // Camera framing. Drag orbits, wheel dollies; both clamp at the same limits.
 const VIEW = {
@@ -19,62 +30,57 @@ const VIEW = {
   zoom: 0.001,
   ease: 6.5,
   lookUp: 1.15,
-};
+} as const;
 
-const GRID = { span: 40, step: 1, y: -0.001 };
+const GRID = { span: 40, step: 1, y: -0.001 } as const;
 
-const local = new THREE.Vector3();
-const look = new THREE.Vector3();
-const desired = new THREE.Vector3();
+const local = new Vector3();
+const look = new Vector3();
+const desired = new Vector3();
 
+/** Owns the renderer, the camera rig and the frame loop. */
 export class Stage {
-  #host;
-  #input;
-  #renderer;
-  #scene;
-  #camera;
-  #spider;
-  #grid;
-  #resizeObserver;
+  readonly #host: HTMLElement;
+  readonly #input: Input;
+  readonly #renderer: WebGLRenderer;
+  readonly #scene = new Scene();
+  readonly #camera: PerspectiveCamera;
+  readonly #spider = new Spider();
+  readonly #grid = buildGrid();
+  #resizeObserver!: ResizeObserver;
 
-  #yaw = VIEW.yaw;
-  #pitch = VIEW.pitch;
-  #distance = VIEW.distance;
+  #yaw: number = VIEW.yaw;
+  #pitch: number = VIEW.pitch;
+  #distance: number = VIEW.distance;
   #dragging = false;
   #pointerX = 0;
   #pointerY = 0;
-  #camPos = new THREE.Vector3();
+  readonly #camPos = new Vector3();
   #camReady = false;
   #last = 0;
 
-  constructor(host, input) {
+  constructor(host: HTMLElement, input: Input) {
     this.#host = host;
     this.#input = input;
 
-    this.#renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.#renderer = new WebGLRenderer({ antialias: true });
     this.#renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     this.#renderer.setClearColor(PALETTE.paper, 1);
     host.appendChild(this.#renderer.domElement);
 
-    this.#scene = new THREE.Scene();
-    this.#camera = new THREE.PerspectiveCamera(VIEW.fov, 1, VIEW.near, VIEW.far);
-
-    this.#spider = new Spider();
-    this.#scene.add(this.#spider.root, this.#spider.rig);
-
-    this.#grid = buildGrid();
-    this.#scene.add(this.#grid);
+    this.#camera = new PerspectiveCamera(VIEW.fov, 1, VIEW.near, VIEW.far);
+    this.#scene.add(this.#spider.root, this.#spider.rig, this.#grid);
 
     this.#bindEvents();
     this.#resize();
   }
 
-  start() {
+  start(): void {
     this.#last = performance.now();
     this.#renderer.setAnimationLoop(this.#frame);
   }
 
-  dispose() {
+  dispose(): void {
     this.#renderer.setAnimationLoop(null);
     this.#resizeObserver.disconnect();
     const el = this.#renderer.domElement;
@@ -86,7 +92,7 @@ export class Stage {
     el.remove();
   }
 
-  #bindEvents() {
+  #bindEvents(): void {
     const el = this.#renderer.domElement;
     el.addEventListener('pointerdown', this.#onPointerDown);
     el.addEventListener('pointerup', this.#onPointerUp);
@@ -97,21 +103,21 @@ export class Stage {
     this.#resizeObserver.observe(this.#host);
   }
 
-  #onPointerDown = (event) => {
+  #onPointerDown = (event: PointerEvent): void => {
     this.#dragging = true;
     this.#pointerX = event.clientX;
     this.#pointerY = event.clientY;
     this.#renderer.domElement.setPointerCapture(event.pointerId);
   };
 
-  #onPointerUp = () => {
+  #onPointerUp = (): void => {
     this.#dragging = false;
   };
 
-  #onPointerMove = (event) => {
+  #onPointerMove = (event: PointerEvent): void => {
     if (!this.#dragging) return;
     this.#yaw -= (event.clientX - this.#pointerX) * VIEW.dragYaw;
-    this.#pitch = THREE.MathUtils.clamp(
+    this.#pitch = MathUtils.clamp(
       this.#pitch + (event.clientY - this.#pointerY) * VIEW.dragPitch,
       VIEW.minPitch,
       VIEW.maxPitch,
@@ -120,8 +126,8 @@ export class Stage {
     this.#pointerY = event.clientY;
   };
 
-  #onWheel = (event) => {
-    this.#distance = THREE.MathUtils.clamp(
+  #onWheel = (event: WheelEvent): void => {
+    this.#distance = MathUtils.clamp(
       this.#distance * (1 + event.deltaY * VIEW.zoom),
       VIEW.minDistance,
       VIEW.maxDistance,
@@ -131,7 +137,7 @@ export class Stage {
 
   // Orbit angles are an offset in the character frame, then applied with the
   // same quaternion the body moves with. They are not a second heading.
-  #placeCamera(dt) {
+  #placeCamera(dt: number): void {
     const c = Math.cos(this.#pitch);
     local.set(
       Math.sin(this.#yaw) * c * this.#distance,
@@ -154,7 +160,7 @@ export class Stage {
     this.#camera.lookAt(look);
   }
 
-  #resize() {
+  #resize(): void {
     const w = this.#host.clientWidth;
     const h = this.#host.clientHeight;
     if (w < 2 || h < 2) return;
@@ -163,7 +169,7 @@ export class Stage {
     this.#camera.updateProjectionMatrix();
   }
 
-  #frame = (now) => {
+  #frame = (now: number): void => {
     const dt = Math.min(0.05, (now - this.#last) / 1000);
     this.#last = now;
 
@@ -178,14 +184,14 @@ export class Stage {
   };
 }
 
-function buildGrid() {
-  const group = new THREE.Group();
-  const ink = new THREE.LineBasicMaterial({ color: PALETTE.grid });
-  const points = [];
+function buildGrid(): Group {
+  const group = new Group();
+  const ink = new LineBasicMaterial({ color: PALETTE.grid });
+  const points: Vector3[] = [];
   for (let i = -GRID.span; i <= GRID.span; i += GRID.step) {
-    points.push(new THREE.Vector3(i, GRID.y, -GRID.span), new THREE.Vector3(i, GRID.y, GRID.span));
-    points.push(new THREE.Vector3(-GRID.span, GRID.y, i), new THREE.Vector3(GRID.span, GRID.y, i));
+    points.push(new Vector3(i, GRID.y, -GRID.span), new Vector3(i, GRID.y, GRID.span));
+    points.push(new Vector3(-GRID.span, GRID.y, i), new Vector3(GRID.span, GRID.y, i));
   }
-  group.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(points), ink));
+  group.add(new LineSegments(new BufferGeometry().setFromPoints(points), ink));
   return group;
 }
