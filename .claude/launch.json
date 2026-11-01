@@ -4,8 +4,8 @@
     {
       "name": "p5-art",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["dev:client"],
-      "port": 5173
+      "runtimeArgs": ["dev"],
+      "port": 3000
     }
   ]
 }

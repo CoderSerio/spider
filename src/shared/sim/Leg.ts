@@ -1,6 +1,6 @@
 import { Group, LineSegments, Mesh, Vector3 } from 'three';
-import { BONES, type MountSpec } from '../config';
-import { ballEdges, ballGeo, clawEdges, clawGeo, inkMat, paperMat, tubeEdges, tubeGeo } from './parts';
+import { BONES, type MountSpec } from '../config.js';
+import { ballEdges, ballGeo, clawEdges, clawGeo, inkMat, paperMat, tubeEdges, tubeGeo } from './parts.js';
 
 export class Leg {
   readonly plant = new Vector3();

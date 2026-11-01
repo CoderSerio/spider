@@ -1,5 +1,6 @@
 node_modules/
 dist/
 dist-server/
+config.yaml
 *.local
 .DS_Store

@@ -10,10 +10,11 @@ import {
   Vector3,
   type BufferGeometry,
 } from 'three';
-import { BONES, DECK_Y, GAIT, MOUNTS } from '../config';
-import type { Controls } from '../types';
-import { Leg } from './Leg';
-import { addSolid, ballEdges, ballGeo, inkMat, paperMat } from './parts';
+import { BONES, DECK_Y, GAIT, MOUNTS } from '../config.js';
+import type { SpiderState } from '../state.js';
+import type { Controls } from '../types.js';
+import { Leg } from './Leg.js';
+import { addSolid, ballEdges, ballGeo, inkMat, paperMat } from './parts.js';
 
 // Mechanical spider: a cephalothorax on eight jointed legs, an abdomen hung
 // behind it, and an alternating tetrapod gait.
@@ -89,6 +90,39 @@ export class Spider {
     this.chassis.rotation.z = this.yawRate * GAIT.roll;
 
     this.#stepGait(throttle, turn, boost);
+    this.#pose();
+  }
+
+  /** Snapshot for the wire: everything a viewer needs to rebuild the pose. */
+  capture(): SpiderState {
+    return {
+      time: this.time,
+      position: { x: this.root.position.x, y: this.root.position.y, z: this.root.position.z },
+      yaw: this.yaw,
+      speed: this.speed,
+      height: this.heightSet,
+      chassisPitch: this.chassis.rotation.x,
+      chassisRoll: this.chassis.rotation.z,
+      headYaw: this.headYaw,
+      feet: this.legs.map((leg) => ({ x: leg.foot.x, y: leg.foot.y, z: leg.foot.z })),
+    };
+  }
+
+  /** Viewer path: adopt an authoritative state and re-solve the pose. */
+  applyState(state: SpiderState): void {
+    this.time = state.time;
+    this.yaw = state.yaw;
+    this.speed = state.speed;
+    this.heightSet = state.height;
+    this.root.position.set(state.position.x, state.position.y, state.position.z);
+    this.root.rotation.y = state.yaw;
+    this.chassis.rotation.x = state.chassisPitch;
+    this.chassis.rotation.z = state.chassisRoll;
+    this.#head.rotation.y = state.headYaw;
+    for (let i = 0; i < this.legs.length; i++) {
+      const foot = state.feet[i];
+      this.legs[i].foot.set(foot.x, foot.y, foot.z);
+    }
     this.#pose();
   }
 

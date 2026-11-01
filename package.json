@@ -7,19 +7,30 @@
     "node": ">=22.12"
   },
   "scripts": {
-    "dev": "concurrently -k -n client,server -c cyan,magenta \"pnpm dev:client\" \"pnpm dev:server\"",
-    "dev:client": "vite",
+    "dev": "concurrently -k -n client,server -c cyan,magenta \"vite build --watch\" \"tsx watch src/server/index.ts\"",
+    "dev:hmr": "vite",
     "dev:server": "tsx watch src/server/index.ts",
     "build": "pnpm build:client && pnpm build:server",
     "build:client": "vite build",
     "build:server": "tsc -p tsconfig.server.json",
     "start": "node dist/server/index.js",
+    "agent": "tsx src/agent/cli.ts",
+    "mcp": "tsx src/server/mcp/stdio.ts",
     "typecheck": "tsc -p tsconfig.client.json --noEmit && tsc -p tsconfig.server.json --noEmit"
   },
   "dependencies": {
+    "@ai-sdk/deepseek": "^3.0.77",
+    "@ai-sdk/gateway": "^4.0.132",
+    "@ai-sdk/mcp": "^2.0.88",
+    "@ai-sdk/openai-compatible": "^3.0.82",
     "@fastify/static": "^8.3.0",
+    "@fastify/websocket": "^11.3.6",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "ai": "^7.0.159",
     "fastify": "^5.12.7",
-    "three": "^0.187.0"
+    "three": "^0.187.0",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",

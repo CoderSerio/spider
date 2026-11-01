@@ -48,3 +48,74 @@ body {
   line-height: 1.35;
   text-align: center;
 }
+
+#agent {
+  position: absolute;
+  left: 22px;
+  top: 18px;
+  z-index: 3;
+  width: min(380px, calc(100vw - 44px));
+  color: #1b1714;
+  font: 13px/1.55 "Iowan Old Style", "Palatino Linotype", "Songti SC", serif;
+}
+
+#agent-form {
+  display: flex;
+  gap: 8px;
+}
+
+#agent-goal {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid #1b1714;
+  background: rgba(243, 239, 230, 0.85);
+  color: inherit;
+  font: inherit;
+}
+
+#agent button {
+  padding: 6px 10px;
+  border: 1px solid #1b1714;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+#agent button:hover {
+  background: rgba(27, 23, 20, 0.08);
+}
+
+#agent-log {
+  margin-top: 10px;
+  max-height: 42vh;
+  overflow: auto;
+  opacity: 0.9;
+}
+
+#agent-log p {
+  margin: 0 0 4px;
+}
+
+#agent-log p.goal {
+  font-weight: 600;
+}
+
+#agent-log p.tool {
+  color: #6b4b2a;
+}
+
+#agent-log p.result {
+  font-size: 12px;
+  color: #4a4a4a;
+  opacity: 0.75;
+}
+
+#agent-log p.error {
+  color: #a33a2a;
+}
+
+#agent-log p.done {
+  margin-top: 8px;
+}

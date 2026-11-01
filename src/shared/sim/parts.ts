@@ -10,7 +10,7 @@ import {
   type BufferGeometry,
   type Object3D,
 } from 'three';
-import { PALETTE } from '../config';
+import { PALETTE } from '../config.js';
 
 // Every part of the model shares these materials and primitives.
 

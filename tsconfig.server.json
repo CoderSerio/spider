@@ -5,9 +5,9 @@
     "moduleResolution": "NodeNext",
     "lib": ["ES2023"],
     "types": ["node"],
-    "rootDir": "src/server",
-    "outDir": "dist/server",
+    "rootDir": "src",
+    "outDir": "dist",
     "sourceMap": true
   },
-  "include": ["src/server/**/*.ts"]
+  "include": ["src/server/**/*.ts", "src/agent/**/*.ts", "src/shared/**/*.ts"]
 }

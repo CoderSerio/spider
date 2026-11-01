@@ -1,17 +1,23 @@
 import {
   BufferGeometry,
+  CylinderGeometry,
+  EdgesGeometry,
   Group,
   LineBasicMaterial,
   LineSegments,
   MathUtils,
+  Mesh,
+  MeshBasicMaterial,
   PerspectiveCamera,
   Scene,
+  SphereGeometry,
   Vector3,
   WebGLRenderer,
 } from 'three';
-import { PALETTE } from './config';
-import type { Input } from './input';
-import { Spider } from './spider/Spider';
+import { PALETTE } from '../shared/config.js';
+import type { SnapshotMessage } from '../shared/protocol.js';
+import { Spider } from '../shared/sim/Spider.js';
+import { inkMat } from '../shared/sim/parts.js';
 
 // Camera framing. Drag orbits, wheel dollies; both clamp at the same limits.
 const VIEW = {
@@ -38,15 +44,15 @@ const local = new Vector3();
 const look = new Vector3();
 const desired = new Vector3();
 
-/** Owns the renderer, the camera rig and the frame loop. */
+/** Renderer and camera. It mirrors whatever the server says; it never steps. */
 export class Stage {
   readonly #host: HTMLElement;
-  readonly #input: Input;
   readonly #renderer: WebGLRenderer;
   readonly #scene = new Scene();
   readonly #camera: PerspectiveCamera;
   readonly #spider = new Spider();
   readonly #grid = buildGrid();
+  readonly #props = new Map<string, Group>();
   #resizeObserver!: ResizeObserver;
 
   #yaw: number = VIEW.yaw;
@@ -57,11 +63,10 @@ export class Stage {
   #pointerY = 0;
   readonly #camPos = new Vector3();
   #camReady = false;
-  #last = 0;
+  #last = performance.now();
 
-  constructor(host: HTMLElement, input: Input) {
+  constructor(host: HTMLElement) {
     this.#host = host;
-    this.#input = input;
 
     this.#renderer = new WebGLRenderer({ antialias: true });
     this.#renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
@@ -69,7 +74,7 @@ export class Stage {
     host.appendChild(this.#renderer.domElement);
 
     this.#camera = new PerspectiveCamera(VIEW.fov, 1, VIEW.near, VIEW.far);
-    this.#scene.add(this.#spider.root, this.#spider.rig, this.#grid);
+    this.#scene.add(this.#spider.root, this.#spider.rig, this.#grid, ...this.#buildProps());
 
     this.#bindEvents();
     this.#resize();
@@ -78,6 +83,16 @@ export class Stage {
   start(): void {
     this.#last = performance.now();
     this.#renderer.setAnimationLoop(this.#frame);
+  }
+
+  apply(message: SnapshotMessage): void {
+    this.#spider.applyState(message.state);
+    for (const entity of message.world.entities) {
+      const prop = this.#props.get(entity.id);
+      if (!prop) continue;
+      prop.visible = !entity.consumed;
+      prop.position.set(entity.x, APPLE_REST_Y, entity.z);
+    }
   }
 
   dispose(): void {
@@ -90,6 +105,12 @@ export class Stage {
     el.removeEventListener('wheel', this.#onWheel);
     this.#renderer.dispose();
     el.remove();
+  }
+
+  #buildProps(): Group[] {
+    const apple = buildApple();
+    this.#props.set('apple', apple);
+    return [apple];
   }
 
   #bindEvents(): void {
@@ -173,8 +194,6 @@ export class Stage {
     const dt = Math.min(0.05, (now - this.#last) / 1000);
     this.#last = now;
 
-    if (!this.#input.paused) this.#spider.update(dt, this.#input);
-
     // The grid follows the body in whole cells, so it reads as an endless floor.
     this.#grid.position.x = Math.round(this.#spider.root.position.x);
     this.#grid.position.z = Math.round(this.#spider.root.position.z);
@@ -182,6 +201,32 @@ export class Stage {
     this.#placeCamera(dt);
     this.#renderer.render(this.#scene, this.#camera);
   };
+}
+
+const APPLE_RADIUS = 0.34;
+const APPLE_REST_Y = APPLE_RADIUS;
+
+function buildApple(): Group {
+  const apple = new Group();
+
+  const body = new Mesh(
+    new SphereGeometry(APPLE_RADIUS, 14, 10),
+    new MeshBasicMaterial({ color: 0xb4432f }),
+  );
+  body.add(new LineSegments(new EdgesGeometry(body.geometry, 20), inkMat));
+  apple.add(body);
+
+  const stem = new Mesh(
+    new CylinderGeometry(0.028, 0.022, 0.2, 6),
+    new MeshBasicMaterial({ color: 0x4a3b2a }),
+  );
+  stem.position.set(0.02, APPLE_RADIUS + 0.12, 0);
+  stem.rotation.z = 0.18;
+  stem.add(new LineSegments(new EdgesGeometry(stem.geometry, 20), inkMat));
+  apple.add(stem);
+
+  apple.position.y = APPLE_REST_Y;
+  return apple;
 }
 
 function buildGrid(): Group {

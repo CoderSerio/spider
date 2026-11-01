@@ -1,15 +1,23 @@
-import type { Controls } from './types';
+import type { Controls } from '../shared/types.js';
 
 const NAV_KEYS = new Set(['ShiftLeft', 'ShiftRight']);
 
-/** Keyboard state. The stage reads these every frame; nothing else writes to them. */
-export class Input implements Controls {
+/** Keyboard state, pushed to the server as it changes. */
+export class Input {
   #held = new Set<string>();
   #paused = false;
-  #target: Window;
+  readonly #target: Window;
+  readonly #onInput: (controls: Controls) => void;
+  readonly #onPause: (paused: boolean) => void;
 
-  constructor(target: Window = window) {
+  constructor(
+    target: Window,
+    onInput: (controls: Controls) => void,
+    onPause: (paused: boolean) => void,
+  ) {
     this.#target = target;
+    this.#onInput = onInput;
+    this.#onPause = onPause;
     target.addEventListener('keydown', this.#onKeyDown);
     target.addEventListener('keyup', this.#onKeyUp);
   }
@@ -18,26 +26,19 @@ export class Input implements Controls {
     return this.#paused;
   }
 
-  get throttle(): number {
-    return this.#axis('KeyW', 'KeyS') || this.#axis('ArrowUp', 'ArrowDown');
-  }
-
-  get turn(): number {
-    return this.#axis('KeyD', 'KeyA') || this.#axis('ArrowRight', 'ArrowLeft');
-  }
-
-  get lift(): number {
-    return this.#axis('KeyR', 'KeyF');
-  }
-
-  get boost(): number {
-    return this.#held.has('ShiftLeft') || this.#held.has('ShiftRight') ? 1 : 0;
-  }
-
   dispose(): void {
     this.#target.removeEventListener('keydown', this.#onKeyDown);
     this.#target.removeEventListener('keyup', this.#onKeyUp);
     this.#held.clear();
+  }
+
+  #controls(): Controls {
+    return {
+      throttle: this.#axis('KeyW', 'KeyS') || this.#axis('ArrowUp', 'ArrowDown'),
+      turn: this.#axis('KeyD', 'KeyA') || this.#axis('ArrowRight', 'ArrowLeft'),
+      lift: this.#axis('KeyR', 'KeyF'),
+      boost: this.#held.has('ShiftLeft') || this.#held.has('ShiftRight') ? 1 : 0,
+    };
   }
 
   #axis(positive: string, negative: string): number {
@@ -47,15 +48,18 @@ export class Input implements Controls {
   #onKeyDown = (event: KeyboardEvent): void => {
     if (event.code === 'Space' && !event.repeat) {
       this.#paused = !this.#paused;
+      this.#onPause(this.#paused);
       event.preventDefault();
       return;
     }
     this.#held.add(event.code);
     if (Input.#steers(event.code)) event.preventDefault();
+    this.#onInput(this.#controls());
   };
 
   #onKeyUp = (event: KeyboardEvent): void => {
     this.#held.delete(event.code);
+    this.#onInput(this.#controls());
   };
 
   static #steers(code: string): boolean {
