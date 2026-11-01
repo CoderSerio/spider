@@ -2,28 +2,17 @@ import type { Controls } from '../shared/types.js';
 
 const NAV_KEYS = new Set(['ShiftLeft', 'ShiftRight']);
 
-/** Keyboard state, pushed to the server as it changes. */
+/** Keyboard state, pushed to the server as it changes. The page is a viewer. */
 export class Input {
   #held = new Set<string>();
-  #paused = false;
   readonly #target: Window;
   readonly #onInput: (controls: Controls) => void;
-  readonly #onPause: (paused: boolean) => void;
 
-  constructor(
-    target: Window,
-    onInput: (controls: Controls) => void,
-    onPause: (paused: boolean) => void,
-  ) {
+  constructor(target: Window, onInput: (controls: Controls) => void) {
     this.#target = target;
     this.#onInput = onInput;
-    this.#onPause = onPause;
     target.addEventListener('keydown', this.#onKeyDown);
     target.addEventListener('keyup', this.#onKeyUp);
-  }
-
-  get paused(): boolean {
-    return this.#paused;
   }
 
   dispose(): void {
@@ -46,12 +35,6 @@ export class Input {
   }
 
   #onKeyDown = (event: KeyboardEvent): void => {
-    if (event.code === 'Space' && !event.repeat) {
-      this.#paused = !this.#paused;
-      this.#onPause(this.#paused);
-      event.preventDefault();
-      return;
-    }
     this.#held.add(event.code);
     if (Input.#steers(event.code)) event.preventDefault();
     this.#onInput(this.#controls());

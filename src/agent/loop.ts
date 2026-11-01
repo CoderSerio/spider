@@ -7,8 +7,8 @@ import { makeModel } from './model.js';
 const SYSTEM = `You pilot a mechanical spider in a small grid world.
 Achieve the user's goal by calling tools, not by describing what you would do.
 Always observe before acting: distances and bearings come from observe, never guess them.
-To act on something, use approach to get within reach, then the matching action
-(an apple is eaten with eat). If a tool returns ok: false, read its reason and the
+To act on something, use approach to get within reach, then interact
+(an apple is eaten with interact). If a tool returns ok: false, read its reason and the
 achieved value before retrying, and never repeat the same failing call twice.
 Stop as soon as the goal is met, then reply with one short sentence.`;
 

@@ -9,8 +9,11 @@ import {
   Mesh,
   MeshBasicMaterial,
   PerspectiveCamera,
+  Plane,
+  Raycaster,
   Scene,
   SphereGeometry,
+  Vector2,
   Vector3,
   WebGLRenderer,
 } from 'three';
@@ -43,6 +46,10 @@ const GRID = { span: 40, step: 1, y: -0.001 } as const;
 const local = new Vector3();
 const look = new Vector3();
 const desired = new Vector3();
+const groundHit = new Vector3();
+const ndc = new Vector2();
+const groundPlane = new Plane(new Vector3(0, 1, 0), 0);
+const raycaster = new Raycaster();
 
 /** Renderer and camera. It mirrors whatever the server says; it never steps. */
 export class Stage {
@@ -61,6 +68,11 @@ export class Stage {
   #dragging = false;
   #pointerX = 0;
   #pointerY = 0;
+  #downX = 0;
+  #downY = 0;
+  #placeMode = false;
+  /** Called when the user clicks the ground while place mode is on. */
+  onGroundClick: ((x: number, z: number) => void) | null = null;
   readonly #camPos = new Vector3();
   #camReady = false;
   #last = performance.now();
@@ -74,7 +86,7 @@ export class Stage {
     host.appendChild(this.#renderer.domElement);
 
     this.#camera = new PerspectiveCamera(VIEW.fov, 1, VIEW.near, VIEW.far);
-    this.#scene.add(this.#spider.root, this.#spider.rig, this.#grid, ...this.#buildProps());
+    this.#scene.add(this.#spider.root, this.#spider.rig, this.#grid);
 
     this.#bindEvents();
     this.#resize();
@@ -88,11 +100,22 @@ export class Stage {
   apply(message: SnapshotMessage): void {
     this.#spider.applyState(message.state);
     for (const entity of message.world.entities) {
-      const prop = this.#props.get(entity.id);
-      if (!prop) continue;
+      let prop = this.#props.get(entity.id);
+      if (!prop) {
+        const built = buildProp(entity.kind);
+        if (!built) continue;
+        prop = built;
+        this.#props.set(entity.id, prop);
+        this.#scene.add(prop);
+      }
       prop.visible = !entity.consumed;
       prop.position.set(entity.x, APPLE_REST_Y, entity.z);
     }
+  }
+
+  setPlaceMode(enabled: boolean): void {
+    this.#placeMode = enabled;
+    this.#renderer.domElement.style.cursor = enabled ? 'crosshair' : '';
   }
 
   dispose(): void {
@@ -105,12 +128,6 @@ export class Stage {
     el.removeEventListener('wheel', this.#onWheel);
     this.#renderer.dispose();
     el.remove();
-  }
-
-  #buildProps(): Group[] {
-    const apple = buildApple();
-    this.#props.set('apple', apple);
-    return [apple];
   }
 
   #bindEvents(): void {
@@ -128,12 +145,32 @@ export class Stage {
     this.#dragging = true;
     this.#pointerX = event.clientX;
     this.#pointerY = event.clientY;
+    this.#downX = event.clientX;
+    this.#downY = event.clientY;
     this.#renderer.domElement.setPointerCapture(event.pointerId);
   };
 
-  #onPointerUp = (): void => {
+  #onPointerUp = (event: PointerEvent): void => {
+    const wasDragging = this.#dragging;
     this.#dragging = false;
+    if (!this.#placeMode || !wasDragging) return;
+    // A drag orbits the camera; only a near-stationary release plants a prop.
+    if (Math.hypot(event.clientX - this.#downX, event.clientY - this.#downY) > 6) return;
+    const point = this.#groundPoint(event);
+    if (point) this.onGroundClick?.(point.x, point.z);
   };
+
+  #groundPoint(event: PointerEvent): { x: number; z: number } | null {
+    const rect = this.#renderer.domElement.getBoundingClientRect();
+    ndc.set(
+      ((event.clientX - rect.left) / rect.width) * 2 - 1,
+      -((event.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    raycaster.setFromCamera(ndc, this.#camera);
+    return raycaster.ray.intersectPlane(groundPlane, groundHit)
+      ? { x: groundHit.x, z: groundHit.z }
+      : null;
+  }
 
   #onPointerMove = (event: PointerEvent): void => {
     if (!this.#dragging) return;
@@ -205,6 +242,12 @@ export class Stage {
 
 const APPLE_RADIUS = 0.34;
 const APPLE_REST_Y = APPLE_RADIUS;
+
+function buildProp(kind: string): Group | null {
+  if (kind !== 'apple') return null;
+
+  return buildApple();
+}
 
 function buildApple(): Group {
   const apple = new Group();

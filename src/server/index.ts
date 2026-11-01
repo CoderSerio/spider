@@ -30,13 +30,6 @@ app.get('/api/health', async () => ({
   spider: session.observe().self,
 }));
 
-/** What the agent will run as, so the panel can say whether it is ready. */
-app.get('/api/settings', async () => ({
-  provider: settings.agent.provider,
-  model: settings.agent.model,
-  ready: Boolean(settings.agent.apiKey),
-}));
-
 try {
   app.log.info(
     `agent: ${settings.agent.provider}/${settings.agent.model}` +

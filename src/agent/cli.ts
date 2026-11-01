@@ -1,33 +1,52 @@
+import { stdin, stdout } from 'node:process';
+import { createInterface } from 'node:readline/promises';
 import { loadSettings } from '../settings.js';
+import { describeResult, describeTool } from './describe.js';
 import { runAgent } from './loop.js';
 
 const settings = loadSettings();
-const goal = process.argv.slice(2).join(' ').trim() || '吃掉场景里的苹果。';
+const oneShot = process.argv.slice(2).join(' ').trim();
 
-console.log(`模型：${settings.agent.provider}/${settings.agent.model}`);
-console.log(`目标：${goal}\n`);
+if (oneShot) {
+  await walkThrough(oneShot);
+} else {
+  const rl = createInterface({ input: stdin, output: stdout });
+  console.log(`机械蛛 · ${settings.agent.provider}/${settings.agent.model}`);
+  console.log('输入目标后回车执行，直接回车退出。');
 
-const answer = await runAgent({
-  goal,
-  settings,
-  onEvent(event) {
-    switch (event.type) {
-      case 'text':
-        process.stdout.write(event.text);
-        break;
-      case 'tool-call':
-        console.log(`\n→ ${event.name} ${JSON.stringify(event.input)}`);
-        break;
-      case 'tool-result':
-        console.log(`← ${JSON.stringify(event.output).slice(0, 240)}`);
-        break;
-      case 'error':
-        console.error(`\n! ${event.message}`);
-        break;
-      default:
-        break;
-    }
-  },
-});
+  for (;;) {
+    const goal = (await rl.question('\n目标 › ')).trim();
+    if (!goal) break;
+    await walkThrough(goal);
+  }
 
-console.log(`\n\n${answer}`);
+  rl.close();
+}
+
+async function walkThrough(goal: string): Promise<void> {
+  console.log(`\n▸ ${goal}`);
+  try {
+    const answer = await runAgent({
+      goal,
+      settings,
+      onEvent(event) {
+        switch (event.type) {
+          case 'tool-call':
+            console.log(`   ${describeTool(event.name, event.input as Record<string, unknown> | undefined)}`);
+            break;
+          case 'tool-result':
+            console.log(`   · ${describeResult(event.output)}`);
+            break;
+          case 'error':
+            console.error(`   ! ${event.message}`);
+            break;
+          default:
+            break;
+        }
+      },
+    });
+    console.log(`\n${answer.trim()}\n`);
+  } catch (error) {
+    console.error(`\n失败：${error instanceof Error ? error.message : String(error)}\n`);
+  }
+}

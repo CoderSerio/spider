@@ -9,5 +9,5 @@
     "outDir": "dist",
     "sourceMap": true
   },
-  "include": ["src/server/**/*.ts", "src/agent/**/*.ts", "src/shared/**/*.ts"]
+  "include": ["src/*.ts", "src/server/**/*.ts", "src/agent/**/*.ts", "src/shared/**/*.ts"]
 }

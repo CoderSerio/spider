@@ -167,13 +167,16 @@ export class SimSession {
     return { ...walk, id, distance };
   }
 
-  /** Consume the nearest edible entity, but only if it is within reach. */
-  eat(id?: string): GoalOutcome {
+  /**
+   * The interaction key: act on whatever is nearby, the way F works in a game.
+   * Apples are eaten today; future kinds dispatch to their own effect here.
+   */
+  interact(id?: string): GoalOutcome {
     const { x, z } = this.spider.root.position;
     const candidates = this.world.entities.filter(
-      (item) => !item.consumed && (id ? item.id === id : item.kind === 'apple'),
+      (item) => !item.consumed && (id ? item.id === id : true),
     );
-    if (candidates.length === 0) return { ok: false, reason: 'nothing-to-eat' };
+    if (candidates.length === 0) return { ok: false, reason: 'nothing-to-interact' };
 
     const closest = candidates.reduce((best, item) =>
       Math.hypot(item.x - x, item.z - z) < Math.hypot(best.x - x, best.z - z) ? item : best,
@@ -181,16 +184,29 @@ export class SimSession {
     const distance = Math.hypot(closest.x - x, closest.z - z);
     if (distance > REACH) return { ok: false, reason: 'out-of-reach', id: closest.id, distance };
 
-    closest.consumed = true;
-    return { ok: true, ate: closest.id, distance };
+    if (closest.kind === 'apple') {
+      closest.consumed = true;
+      return { ok: true, action: 'eat', target: closest.id, distance };
+    }
+    return { ok: false, reason: 'not-interactable', id: closest.id };
+  }
+
+  /** Drop a new prop into the world. Used by the page and by the agent. */
+  addEntity(kind: string, x: number, z: number): WorldState['entities'][number] {
+    const sameKind = this.world.entities.filter((item) => item.kind === kind).length;
+    const entity = { id: `${kind}-${sameKind + 1}`, kind, x, z, consumed: false };
+    this.world.entities.push(entity);
+    return entity;
   }
 
   #step(dt: number): void {
     if (this.paused) return;
 
     const active = this.#active;
-    const agent = active ? active.goal.controls() : ZERO;
-    this.spider.update(dt, this.#humanHeld() ? this.#human : agent);
+    // While a goal owns the body nothing else may steer it: a dropped keyup in
+    // the browser would otherwise hold the controls and starve the agent.
+    const input = active ? active.goal.controls() : this.#humanHeld() ? this.#human : ZERO;
+    this.spider.update(dt, input);
     if (!active) return;
 
     const reached = active.goal.done();

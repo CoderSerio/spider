@@ -101,17 +101,18 @@ export function createMcpServer(session: SimSession): McpServer {
   );
 
   server.registerTool(
-    'eat',
+    'interact',
     {
-      title: 'Eat',
+      title: 'Interact',
       description:
-        'Consume a nearby edible entity. Fails without moving if nothing edible is within ' +
-        `reach (${REACH} units) — use approach first. ${FRAME}`,
+        'The interaction key, the way F works in a game: act on the nearest entity, or on the ' +
+        'one you name. An apple gets eaten; other kinds dispatch to their own effect. Nothing ' +
+        `happens if the target is beyond reach (${REACH} units) — use approach first. ${FRAME}`,
       inputSchema: z.object({
-        id: z.string().optional().describe('Entity id; defaults to the nearest edible one.'),
+        id: z.string().optional().describe('Entity id; defaults to the nearest one.'),
       }),
     },
-    async ({ id }) => after(session.eat(id)),
+    async ({ id }) => after(session.interact(id)),
   );
 
   server.registerTool(
@@ -156,6 +157,24 @@ export function createMcpServer(session: SimSession): McpServer {
       }),
     },
     async ({ seconds }) => after(await session.wait(seconds)),
+  );
+
+  server.registerTool(
+    'plant_apple',
+    {
+      title: 'Plant an apple',
+      description:
+        'Place another apple in the world at a world coordinate. Useful when the current goal ' +
+        `needs a fresh target. ${FRAME}`,
+      inputSchema: z.object({
+        x: z.number().describe('World x in units.'),
+        z: z.number().describe('World z in units.'),
+      }),
+    },
+    async ({ x, z }) => {
+      const entity = session.addEntity('apple', x, z);
+      return text({ planted: entity, observation: session.observe() });
+    },
   );
 
   return server;

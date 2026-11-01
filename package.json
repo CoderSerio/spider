@@ -7,9 +7,9 @@
     "node": ">=22.12"
   },
   "scripts": {
-    "dev": "concurrently -k -n client,server -c cyan,magenta \"vite build --watch\" \"tsx watch src/server/index.ts\"",
-    "dev:hmr": "vite",
+    "dev": "tsx src/dev.ts",
     "dev:server": "tsx watch src/server/index.ts",
+    "dev:hmr": "vite",
     "build": "pnpm build:client && pnpm build:server",
     "build:client": "vite build",
     "build:server": "tsc -p tsconfig.server.json",
