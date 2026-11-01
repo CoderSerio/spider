@@ -1,0 +1,52 @@
+// Single source of truth for the spider's palette and proportions.
+
+export const PALETTE = {
+  paper: 0xf3efe6,
+  ink: 0x1b1714,
+  grid: 0xc8bfb2,
+};
+
+export const DECK_Y = 0.78;
+
+// Eight legs on the cephalothorax. Same phase lifts one tetrapod.
+export const MOUNTS = [
+  { x: -0.22, y: DECK_Y, z: -0.42, side: -1, fore: 1.55, lateral: 0.95, phase: 0 },
+  { x: 0.22, y: DECK_Y, z: -0.42, side: 1, fore: 1.55, lateral: 0.95, phase: 0.5 },
+  { x: -0.4, y: DECK_Y, z: -0.16, side: -1, fore: 0.55, lateral: 1.55, phase: 0.5 },
+  { x: 0.4, y: DECK_Y, z: -0.16, side: 1, fore: 0.55, lateral: 1.55, phase: 0 },
+  { x: -0.4, y: DECK_Y, z: 0.1, side: -1, fore: -0.25, lateral: 1.6, phase: 0 },
+  { x: 0.4, y: DECK_Y, z: 0.1, side: 1, fore: -0.25, lateral: 1.6, phase: 0.5 },
+  { x: -0.24, y: DECK_Y, z: 0.32, side: -1, fore: -1.05, lateral: 1.2, phase: 0.5 },
+  { x: 0.24, y: DECK_Y, z: 0.32, side: 1, fore: -1.05, lateral: 1.2, phase: 0 },
+];
+
+// Four segments per leg, from the shoulder out to the claw.
+export const BONES = [
+  { len: 0.34, radius: 0.07 },
+  { len: 0.86, radius: 0.055 },
+  { len: 0.98, radius: 0.04 },
+  { len: 0.46, radius: 0.028 },
+];
+
+export const GAIT = {
+  footY: 0.16,
+  heightMin: -0.35,
+  heightMax: 0.7,
+  swing: 0.42,
+  swingLift: 0.28,
+  strideScale: 0.7,
+  freq: 1,
+  freqBoost: 1.65,
+  cruise: 1.7,
+  cruiseBoost: 3.4,
+  speedEase: 3.2,
+  yaw: 1.45,
+  yawBoost: 2.1,
+  yawAccel: 4,
+  headYaw: 0.55,
+  headEase: 8,
+  pitch: 0.04,
+  roll: 0.08,
+  liftRate: 0.5,
+  liftEase: 5,
+};
