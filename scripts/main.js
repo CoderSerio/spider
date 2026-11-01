@@ -6,12 +6,13 @@ mountScene(document.getElementById('stage'));
 const held = new Set();
 
 window.addEventListener('keydown', (event) => {
-  held.add(event.code);
-  if (event.code === 'Space') {
+  if (event.code === 'Space' && !event.repeat) {
     state.paused = !state.paused;
     event.preventDefault();
+    return;
   }
-  if (event.code.startsWith('Arrow')) event.preventDefault();
+  held.add(event.code);
+  if (steerKey(event.code)) event.preventDefault();
   applyKeys();
 });
 
@@ -20,9 +21,17 @@ window.addEventListener('keyup', (event) => {
   applyKeys();
 });
 
+function steerKey(code) {
+  return code.startsWith('Arrow') || code.startsWith('Key') || code === 'ShiftLeft' || code === 'ShiftRight';
+}
+
+function axis(pos, neg) {
+  return (held.has(pos) ? 1 : 0) - (held.has(neg) ? 1 : 0);
+}
+
 function applyKeys() {
-  state.turn = (held.has('ArrowRight') ? 1 : 0) - (held.has('ArrowLeft') ? 1 : 0);
-  if (held.has('ArrowUp')) state.speed = 1.7;
-  else if (held.has('ArrowDown')) state.speed = 0.35;
-  else state.speed = 1.15;
+  state.throttle = axis('KeyW', 'KeyS') || axis('ArrowUp', 'ArrowDown');
+  state.turn = axis('KeyD', 'KeyA') || axis('ArrowRight', 'ArrowLeft');
+  state.lift = axis('KeyR', 'KeyF');
+  state.boost = held.has('ShiftLeft') || held.has('ShiftRight') ? 1 : 0;
 }

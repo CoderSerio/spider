@@ -1,6 +1,8 @@
 export const state = {
   paused: false,
   time: 0,
-  speed: 1.15,
+  throttle: 0,
   turn: 0,
+  lift: 0,
+  boost: 0,
 };

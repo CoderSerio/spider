@@ -22,7 +22,7 @@ export function mountScene(host) {
   // same quaternion the body moves with. They are not a second heading.
   let orbitYaw = Math.PI + 0.62;
   let orbitPitch = 0.32;
-  let dist = 12.4;
+  let dist = 9.8;
   let dragging = false;
   let lastX = 0;
   let lastY = 0;
@@ -51,8 +51,11 @@ export function mountScene(host) {
 
   const local = new THREE.Vector3();
   const look = new THREE.Vector3();
+  const desired = new THREE.Vector3();
+  const camPos = new THREE.Vector3();
+  let camReady = false;
 
-  function placeCamera() {
+  function placeCamera(dt) {
     const c = Math.cos(orbitPitch);
     local.set(
       Math.sin(orbitYaw) * c * dist,
@@ -60,7 +63,14 @@ export function mountScene(host) {
       Math.cos(orbitYaw) * c * dist,
     );
     local.applyQuaternion(walker.root.quaternion);
-    camera.position.copy(walker.root.position).add(local);
+    desired.copy(walker.root.position).add(local);
+    if (!camReady) {
+      camPos.copy(desired);
+      camReady = true;
+    } else {
+      camPos.lerp(desired, 1 - Math.exp(-6.5 * Math.max(dt, 0.001)));
+    }
+    camera.position.copy(camPos);
     look.copy(walker.root.position);
     look.y += 1.65;
     camera.lookAt(look);
@@ -88,7 +98,7 @@ export function mountScene(host) {
     }
     grid.position.x = Math.round(walker.root.position.x);
     grid.position.z = Math.round(walker.root.position.z);
-    placeCamera();
+    placeCamera(dt);
     renderer.render(scene, camera);
   }
   requestAnimationFrame(frame);
