@@ -3,19 +3,19 @@ import { shiftDate } from '../dates.js';
 import { KINDS } from '../kinds.js';
 import type { EntityState, Footprint, SpiderState, WorldState } from '../state.js';
 import { blockedAt } from '../sight.js';
-import { APPLE_EVERY, nestBlocks } from '../world.js';
+import { APPLE_EVERY, nestBlocks, restingY } from '../world.js';
 import { Terrain } from '../terrain.js';
 import type { Spider } from './Spider.js';
 
-export const FORMAT = 1;
+export const FORMAT = 3;
 export const RETAIN_DAYS = 3;
-export const MAX_ENTITIES = 32;
+export const MAX_ENTITIES = 64;
 export const MAX_PENDING = 4000;
 export const MAX_JSON = 64_000;
 const MAX_SPROUTS = 1_000_000;
 const MAX_TOOL = 32;
 /**
- * The island rim is 36. A planted foot and a prop set down past that rim are
+ * The island rim is 52. A planted foot and a prop set down past that rim are
  * still this spider. Farther than this is garbage, and the snapshot is dropped.
  */
 const PLACE_M = 1_000_000;
@@ -35,7 +35,7 @@ export interface SimBody {
 /** One stored record. IndexedDB and localStorage share this shape. */
 export interface WorldRecord extends SimBody {
   id: 'current';
-  format: 1;
+  format: 3;
   savedAt: number;
   /** Local day of the write. Retention uses this string, not a new timezone. */
   day: string;
@@ -72,14 +72,22 @@ export function captureBody(session: Restorable, pending: SimBody['pending']): S
   };
 }
 
-export function applyBody(session: Restorable, body: SimBody): void {
+export function applyBody(
+  session: Restorable,
+  body: SimBody,
+  terrain = new Terrain(body.seed),
+): void {
   session.cancel();
   const world = session.world;
-  const terrain = new Terrain(body.seed);
   world.terrain = terrain;
   world.seed = terrain.seed;
   world.blocks = nestBlocks();
-  world.entities = structuredClone(body.entities);
+  // 地形函数会改；恢复时把落地的道具重新放到当前地面上。
+  world.entities = structuredClone(body.entities).map((entity) =>
+    entity.kind === 'nest'
+      ? entity
+      : { ...entity, y: restingY(terrain, entity.kind, entity.x, entity.z, entity.footprint) },
+  );
   world.carrying = structuredClone(body.carrying);
   world.appleIn = body.appleIn;
   world.sprouts = body.sprouts;
@@ -195,6 +203,9 @@ function readEntity(value: unknown): EntityState | null {
     return null;
   }
   if (!footprintOk(raw.footprint)) return null;
+  const vx = optionalNumber(raw.vx);
+  const vz = optionalNumber(raw.vz);
+  if (vx === null || vz === null) return null;
   const entity: EntityState = {
     id: raw.id,
     kind: raw.kind,
@@ -204,7 +215,38 @@ function readEntity(value: unknown): EntityState | null {
     stage: raw.stage as number,
   };
   if (raw.footprint) entity.footprint = raw.footprint as Footprint;
+  if (vx !== undefined) entity.vx = vx;
+  if (vz !== undefined) entity.vz = vz;
+  const spin = readSpin(raw);
+  if (spin === null) return null;
+  if (spin) {
+    entity.qx = spin.qx;
+    entity.qy = spin.qy;
+    entity.qz = spin.qz;
+    entity.qw = spin.qw;
+  }
   return entity;
+}
+
+/** Identity when absent. A partial or non-finite orientation is a bad record. */
+function readSpin(
+  raw: Record<string, unknown>,
+): { qx: number; qy: number; qz: number; qw: number } | null | undefined {
+  const qx = optionalNumber(raw.qx);
+  const qy = optionalNumber(raw.qy);
+  const qz = optionalNumber(raw.qz);
+  const qw = optionalNumber(raw.qw);
+  if (qx === null || qy === null || qz === null || qw === null) return null;
+  if (qx === undefined && qy === undefined && qz === undefined && qw === undefined)
+    return undefined;
+  if (qx === undefined || qy === undefined || qz === undefined || qw === undefined) return null;
+  return { qx, qy, qz, qw };
+}
+
+/** 缺省或有限数字；其他值是坏记录。 */
+function optionalNumber(value: unknown): number | undefined | null {
+  if (value === undefined) return undefined;
+  return isFiniteNumber(value) ? value : null;
 }
 
 function readSpider(value: unknown): SpiderState | null {

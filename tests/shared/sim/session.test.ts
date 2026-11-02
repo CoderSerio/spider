@@ -5,6 +5,7 @@ import { KINDS } from '../../../src/shared/kinds.js';
 import { STUCK_LIMIT, type Goal } from '../../../src/shared/sim/goals.js';
 import { SimSession } from '../../../src/shared/sim/session.js';
 import { insideHome } from '../../../src/shared/sight.js';
+import { Terrain } from '../../../src/shared/terrain.js';
 import type { EntityState } from '../../../src/shared/state.js';
 import type { Controls } from '../../../src/shared/types.js';
 import { block } from '../../helpers.js';
@@ -67,6 +68,10 @@ describe('SimSession basics', () => {
   it('builds a world and binds the body', () => {
     const session = new SimSession(3);
     expect(session.world.seed).toBe(3);
+    const terrain = new Terrain(8);
+    const prepared = new SimSession(1, terrain);
+    expect(prepared.world.terrain).toBe(terrain);
+    expect(prepared.world.seed).toBe(8);
     const snapshot = session.snapshot();
     expect(snapshot.world).toBe(session.world);
     expect(snapshot.state.feet).toHaveLength(8);
@@ -225,7 +230,7 @@ describe('moveTo', () => {
 
   it('reports no path for a point off the island', async () => {
     const session = new SimSession(5);
-    await expect(session.moveTo(0, 40)).resolves.toMatchObject({
+    await expect(session.moveTo(0, 60)).resolves.toMatchObject({
       ok: false,
       reason: 'no-path',
       detour: null,
@@ -535,6 +540,10 @@ describe('carrying', () => {
       fakeEntity({ id: 'a' }),
       fakeEntity({ id: 'b' }),
       fakeEntity({ id: 'c' }),
+      fakeEntity({ id: 'd' }),
+      fakeEntity({ id: 'e' }),
+      fakeEntity({ id: 'f' }),
+      fakeEntity({ id: 'g' }),
     );
     await expect(session.pickUp()).resolves.toMatchObject({ ok: false, reason: 'full' });
   });

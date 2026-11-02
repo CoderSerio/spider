@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { localDate } from '../../../src/shared/dates.js';
 import { SimSession } from '../../../src/shared/sim/session.js';
+import { Terrain } from '../../../src/shared/terrain.js';
 import { APPLE_EVERY } from '../../../src/shared/world.js';
 import {
   applyBody,
@@ -16,6 +17,14 @@ import {
 
 const today = '2026-11-02';
 
+it('plants a body on a terrain that was already baked', () => {
+  const session = new SimSession(1);
+  const baked = new Terrain(2);
+  applyBody(session, captureBody(new SimSession(2), null), baked);
+  expect(session.world.terrain).toBe(baked);
+  expect(session.world.seed).toBe(2);
+});
+
 function session(): SimSession {
   return new SimSession(7);
 }
@@ -25,7 +34,7 @@ function good(): WorldRecord {
   return {
     ...body,
     id: 'current',
-    format: 1,
+    format: 3,
     savedAt: 1_700_000_000_000,
     day: today,
     owner: 'tab',
@@ -68,6 +77,74 @@ describe('snapshot', () => {
       first.spider.update(0.05, { throttle: 1, turn: 0, lift: 0, boost: 1 });
     }
     expect(first.spider.halt).toBe('solid');
+  });
+
+  it('keeps prop velocities and rejects broken ones', () => {
+    const base = good();
+    const apple = base.entities.find((entity) => entity.kind === 'apple')!;
+    const withMotion = {
+      ...base,
+      entities: base.entities.map((entity) =>
+        entity === apple ? { ...entity, vx: 1.5, vz: -0.5 } : entity,
+      ),
+    };
+    const ok = classify(withMotion, today);
+    expect(ok.status).toBe('ok');
+    if (ok.status === 'ok') {
+      expect(ok.record.entities.find((entity) => entity.id === apple.id)).toMatchObject({
+        vx: 1.5,
+        vz: -0.5,
+      });
+    }
+    const badVx = {
+      ...withMotion,
+      entities: withMotion.entities.map((entity) =>
+        entity.id === apple.id ? { ...entity, vx: 'fast' } : entity,
+      ),
+    };
+    expect(classify(badVx, today).status).toBe('malformed');
+    const badVz = {
+      ...withMotion,
+      entities: withMotion.entities.map((entity) =>
+        entity.id === apple.id ? { ...entity, vz: Number.NaN } : entity,
+      ),
+    };
+    expect(classify(badVz, today).status).toBe('malformed');
+  });
+
+  it('keeps a rolled orientation and rejects a partial one', () => {
+    const base = good();
+    const apple = base.entities.find((entity) => entity.kind === 'apple')!;
+    const spun = {
+      ...base,
+      entities: base.entities.map((entity) =>
+        entity === apple ? { ...entity, qx: 0, qy: 0, qz: 0.2, qw: 0.98 } : entity,
+      ),
+    };
+    const ok = classify(spun, today);
+    expect(ok.status).toBe('ok');
+    if (ok.status === 'ok') {
+      expect(ok.record.entities.find((entity) => entity.id === apple.id)).toMatchObject({
+        qx: 0,
+        qy: 0,
+        qz: 0.2,
+        qw: 0.98,
+      });
+    }
+    const partial = {
+      ...spun,
+      entities: spun.entities.map((entity) =>
+        entity.id === apple.id ? { ...entity, qw: undefined } : entity,
+      ),
+    };
+    expect(classify(partial, today).status).toBe('malformed');
+    const broken = {
+      ...spun,
+      entities: spun.entities.map((entity) =>
+        entity.id === apple.id ? { ...entity, qy: 'nope' } : entity,
+      ),
+    };
+    expect(classify(broken, today).status).toBe('malformed');
   });
 
   it('cuts a long sentence down to the stored limit', () => {
@@ -113,7 +190,7 @@ describe('snapshot', () => {
     expect(classify('{', today).status).toBe('malformed');
     expect(classify([], today).status).toBe('malformed');
     expect(classify(1, today).status).toBe('malformed');
-    expect(classify({ ...good(), format: 2 }, today).status).toBe('format');
+    expect(classify({ ...good(), format: 4 }, today).status).toBe('format');
     expect(classify({ ...good(), format: undefined }, today).status).toBe('format');
 
     const bad = (patch: Record<string, unknown>) => classify({ ...good(), ...patch }, today).status;
@@ -157,7 +234,7 @@ describe('snapshot', () => {
     expect(status([], [])).toBe('malformed');
     const crowd = [
       home,
-      ...Array.from({ length: 40 }, (_, index) => ({ ...apple!, id: `apple-${index}` })),
+      ...Array.from({ length: 70 }, (_, index) => ({ ...apple!, id: `apple-${index}` })),
     ];
     expect(status(crowd)).toBe('malformed');
     expect(
@@ -167,6 +244,12 @@ describe('snapshot', () => {
         { ...apple!, id: 'apple-c' },
         { ...apple!, id: 'apple-d' },
       ]),
+    ).toBe('malformed');
+    expect(
+      status(
+        base.entities,
+        Array.from({ length: 8 }, (_, index) => ({ ...apple!, id: `carry-${index}` })),
+      ),
     ).toBe('malformed');
     expect(status([{ ...home, kind: 'nope' }])).toBe('malformed');
     expect(status([{ ...home, id: 'bad id' }])).toBe('malformed');

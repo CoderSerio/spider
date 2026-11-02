@@ -2,6 +2,23 @@
 
 export const PALETTE = {
   paper: 0xf3efe6,
+  /** 巢穴翻出来的土，比纸稍微暗一点。 */
+  soil: 0xe8e1d4,
+  /** 地面只分几种淡色：低处水蓝、缓坡草绿、土、石头。 */
+  ground: 0xe1e6d6,
+  water: 0xcfe0e6,
+  earth: 0xe7e1d3,
+  /** 草叶的淡绿。 */
+  grass: 0xd8dfc5,
+  /** 苹果的淡胭脂、叶子和梗。 */
+  apple: 0xe6c9bb,
+  leaf: 0xcfd9b8,
+  stem: 0xd6c3a8,
+  /** 石子和蜘蛛的淡灰，蜘蛛再深半档。 */
+  stone: 0xdcd9d1,
+  spider: 0xd7d1c7,
+  /** 蜘蛛的复眼。 */
+  eye: 0xb23a2e,
   ink: 0x1b1714,
   grid: 0xc8bfb2,
 } as const;
@@ -9,7 +26,17 @@ export const PALETTE = {
 export const DECK_Y = 0.78;
 
 /** How many things can sit on the spider's back at once. */
-export const CARRY_LIMIT = 3;
+export const CARRY_LIMIT = 7;
+
+/** The island's physical rules. Everything that moves reads these numbers. */
+export const PHYSICS = {
+  gravity: 9.8,
+  /** 1/s, rolling friction. */
+  damping: 2.4,
+  sleepSlope: 0.08,
+  sleepSpeed: 0.03,
+  maxSpeed: 5,
+} as const;
 
 export interface MountSpec {
   readonly x: number;
@@ -40,12 +67,12 @@ export interface BoneSpec {
   readonly radius: number;
 }
 
-/** Four segments per leg, from the shoulder out to the claw. */
+/** Four segments per leg, from the shoulder out to the claw. `radius` is the drawn thickness. */
 export const BONES: readonly BoneSpec[] = [
-  { len: 0.34, radius: 0.07 },
-  { len: 0.86, radius: 0.055 },
-  { len: 0.98, radius: 0.04 },
-  { len: 0.46, radius: 0.028 },
+  { len: 0.34, radius: 0.048 },
+  { len: 0.86, radius: 0.036 },
+  { len: 0.98, radius: 0.026 },
+  { len: 0.46, radius: 0.024 },
 ];
 
 export const GAIT = {

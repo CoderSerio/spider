@@ -9,6 +9,7 @@ import {
   type Object3D,
 } from 'three';
 import { PALETTE } from '../shared/config.js';
+import { kindOf } from '../shared/kinds.js';
 import { TERRAIN } from '../shared/terrain.js';
 import type { EntityState, WorldState } from '../shared/state.js';
 import type { Spider } from '../shared/sim/Spider.js';
@@ -27,7 +28,7 @@ const VIEW = {
   pitch: 0.32,
   distance: 9.8,
   minDistance: 6,
-  maxDistance: 24,
+  maxDistance: 30,
   minPitch: 0.12,
   maxPitch: 1.15,
   dragYaw: 0.005,
@@ -51,6 +52,10 @@ export class Stage {
   readonly #spider: Spider;
   readonly #props = new Map<string, Group>();
   #island: Group | null = null;
+  /** While set, a restored seed waits for the world worker instead of meshing here. */
+  #islandPending = false;
+  #islandRequest = 0;
+  #islandSource: ((seed: number) => Promise<Group>) | null = null;
   /** Last drawn action stage, so a new bite can make a sound. */
   readonly #stages = new Map<string, number>();
   readonly #drapedGrass = new Map<
@@ -92,7 +97,8 @@ export class Stage {
     this.#spider = spider;
 
     this.#renderer = new WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    this.#renderer.setPixelRatio(Math.min(1.5, window.devicePixelRatio || 1));
+    // Draw at the screen's own pixels, capped at 2, so the ink stays sharp.
+    this.#renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     this.#renderer.setClearColor(PALETTE.paper, 1);
     host.appendChild(this.#renderer.domElement);
     paintCanvas(this.#renderer.domElement);
@@ -133,12 +139,39 @@ export class Stage {
     this.#renderer.setAnimationLoop(this.#frame);
   }
 
+  /** Use an island the world worker already built. */
+  placeIsland(group: Group): void {
+    this.#dropIsland();
+    this.#island = group;
+    this.#islandPending = false;
+    this.#scene.add(group);
+  }
+
+  /** A restored seed can be meshed off the page thread. */
+  setIslandSource(source: (seed: number) => Promise<Group>): void {
+    this.#islandSource = source;
+  }
+
   /** The ground mesh is baked once. A restored seed needs a new island. */
   retile(): void {
-    if (this.#island) {
-      disposeGeometries(this.#island);
-      this.#scene.remove(this.#island);
-      this.#island = null;
+    const seed = this.#world?.().seed;
+    if (this.#islandSource && seed != null) {
+      const request = ++this.#islandRequest;
+      this.#islandPending = true;
+      this.#dropIsland();
+      void this.#islandSource(seed).then(
+        (group) => {
+          if (request !== this.#islandRequest) return;
+          this.placeIsland(group);
+        },
+        () => {
+          if (request !== this.#islandRequest) return;
+          this.#islandPending = false;
+          this.#syncWorld();
+        },
+      );
+    } else {
+      this.#dropIsland();
     }
     for (const [id, prop] of this.#props) {
       disposeGeometries(prop);
@@ -155,7 +188,7 @@ export class Stage {
   #syncWorld(): void {
     const world = this.#world?.();
     if (!world) return;
-    if (!this.#island) {
+    if (!this.#island && !this.#islandPending) {
       this.#island = buildIsland((x, z) => world.terrain.height(x, z));
       this.#scene.add(this.#island);
     }
@@ -184,11 +217,25 @@ export class Stage {
     const yaw = this.#spider.yaw;
     const fx = -Math.sin(yaw);
     const fz = -Math.cos(yaw);
+    // 背得多时排成两列，别让七只苹果从背上排到尾巴外面。
+    const rows = held.length > 3 ? 2 : 1;
+    const cols = Math.ceil(held.length / rows);
+    const rightX = -fz;
+    const rightZ = fx;
     for (let index = 0; index < held.length; index++) {
       const item = held[index];
       alive.add(item.id);
-      const along = (index - (held.length - 1) / 2) * 0.42;
-      this.#syncProp(item, back.x - fx * along, back.y + 0.95, back.z - fz * along, world);
+      const row = index % rows;
+      const col = Math.floor(index / rows);
+      const along = (col - (cols - 1) / 2) * 0.42;
+      const lateral = rows === 1 ? 0 : row === 0 ? -0.24 : 0.24;
+      this.#syncProp(
+        item,
+        back.x - fx * along + rightX * lateral,
+        back.y + 0.95,
+        back.z - fz * along + rightZ * lateral,
+        world,
+      );
     }
 
     for (const [id, prop] of this.#props) {
@@ -214,10 +261,21 @@ export class Stage {
       prop = undefined;
       if (previous != null && entity.stage > previous) this.#sound.bite();
     }
+    const spec = kindOf(entity.kind)?.physics;
+    const roll = spec?.rolls ? spec.radius : 0;
     if (!prop) {
-      const built = buildProp(entity.kind, entity.stage, entity.footprint);
+      const built = buildProp(entity.kind, entity.stage, entity.footprint, entity.id);
       if (!built) return;
-      prop = built;
+      if (roll > 0) {
+        // The mesh origin is its bottom. Spin around the center, so the
+        // contact point stays on the ground while the body turns.
+        const pivot = new Group();
+        built.position.y = -roll;
+        pivot.add(built);
+        prop = pivot;
+      } else {
+        prop = built;
+      }
       this.#props.set(entity.id, prop);
       this.#scene.add(prop);
     }
@@ -228,8 +286,14 @@ export class Stage {
         drapeGrass(prop, x, z, (px, pz) => world.terrain.height(px, pz));
         this.#drapedGrass.set(entity.id, { x, z, terrain: world.terrain });
       }
-    } else if (prop.position.x !== x || prop.position.y !== y || prop.position.z !== z) {
-      prop.position.set(x, y, z);
+      return;
+    }
+    const py = y + roll;
+    if (prop.position.x !== x || prop.position.y !== py || prop.position.z !== z) {
+      prop.position.set(x, py, z);
+    }
+    if (roll > 0) {
+      prop.quaternion.set(entity.qx ?? 0, entity.qy ?? 0, entity.qz ?? 0, entity.qw ?? 1);
     }
   }
 
@@ -315,6 +379,17 @@ export class Stage {
       desired.copy(this.#spider.root.position).add(local);
       look.copy(this.#spider.root.position);
       look.y += VIEW.lookUp;
+      // 地形有起伏，镜头不能钻进山腹；沿视线把机位抬到山脊之上。
+      const world = this.#world?.();
+      if (world) {
+        for (let k = 1; k <= 6; k++) {
+          const t = k / 6;
+          const gx = look.x + (desired.x - look.x) * t;
+          const gz = look.z + (desired.z - look.z) * t;
+          const ground = world.terrain.height(gx, gz) + 1.2;
+          desired.y = Math.max(desired.y, look.y + (ground - look.y) / t);
+        }
+      }
     }
 
     if (!this.#camReady) {
@@ -336,6 +411,13 @@ export class Stage {
     this.#camera.updateProjectionMatrix();
     const rect = this.#renderer.domElement.getBoundingClientRect();
     this.#view = { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+  }
+
+  #dropIsland(): void {
+    if (!this.#island) return;
+    disposeGeometries(this.#island);
+    this.#scene.remove(this.#island);
+    this.#island = null;
   }
 
   #frame = (now: number): void => {

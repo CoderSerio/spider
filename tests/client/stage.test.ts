@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { BufferGeometry } from 'three';
+import { BufferGeometry, Group } from 'three';
 import { Spider as RealSpider } from '../../src/shared/sim/Spider.js';
 import type { EntityState, WorldState } from '../../src/shared/state.js';
 import { Stage } from '../../src/client/stage.js';
@@ -137,6 +137,18 @@ describe('Stage setup', () => {
     expect(host.contains(draw.domElement)).toBe(false);
   });
 
+  it('draws at the screen pixels on a retina display', () => {
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 });
+    void new Stage(makeHost(), new RealSpider());
+    expect(renderer().setPixelRatio).toHaveBeenCalledWith(2);
+  });
+
+  it('caps the pixel ratio at two', () => {
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 3 });
+    void new Stage(makeHost(), new RealSpider());
+    expect(renderer().setPixelRatio).toHaveBeenCalledWith(2);
+  });
+
   it('falls back to a pixel ratio of one', () => {
     Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 0 });
     void new Stage(makeHost(), new RealSpider());
@@ -207,6 +219,155 @@ describe('world sync', () => {
     expect(sound.take).toHaveBeenCalled();
   });
 
+  it('spins a round prop around its center and leaves the bottom on the ground', () => {
+    const stage = new Stage(makeHost(), new RealSpider());
+    const apple = entity({
+      id: 'apple-1',
+      x: 2,
+      y: 0.5,
+      z: 0,
+      qx: 0,
+      qy: 0,
+      qz: 0.1,
+      qw: 0.995,
+    });
+    const nest = entity({ id: 'home', kind: 'nest', x: 0, y: 0.02, z: 0 });
+    stage.bind(vi.fn(), () => makeWorld({ entities: [apple, nest] }));
+    stage.start();
+    frame();
+    const scene = renderer().render.mock.calls.at(-1)?.[0] as {
+      children: {
+        position: { x: number; y: number; z: number };
+        quaternion: { z: number; w: number };
+        children: { position: { y: number } }[];
+      }[];
+    };
+    const prop = scene.children.find((child) => Math.abs(child.position.x - 2) < 1e-6);
+    expect(prop?.position.y).toBeCloseTo(0.5 + 0.36);
+    expect(prop?.quaternion.z).toBeCloseTo(0.1);
+    expect(prop?.quaternion.w).toBeCloseTo(0.995);
+    expect(prop?.children[0]?.position.y).toBeCloseTo(-0.36);
+  });
+
+  it('keeps a placed island and swaps in the next one from the source', async () => {
+    const stage = new Stage(makeHost(), new RealSpider());
+    const first = new Group();
+    first.name = 'ready';
+    stage.placeIsland(first);
+    const next = new Group();
+    next.name = 'next';
+    stage.setIslandSource(async () => next);
+    stage.bind(vi.fn(), () => makeWorld());
+    stage.start();
+    frame();
+    const scene = () =>
+      renderer().render.mock.calls.at(-1)?.[0] as { children: { name: string }[] };
+    expect(scene().children.some((child) => child.name === 'ready')).toBe(true);
+    stage.retile();
+    frame();
+    expect(scene().children.some((child) => child.name === 'ready')).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    frame();
+    expect(scene().children.some((child) => child.name === 'next')).toBe(true);
+
+    stage.setIslandSource(async () => {
+      throw new Error('no mesh');
+    });
+    stage.retile();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    frame();
+    expect(scene().children.some((child) => child.name === 'next')).toBe(false);
+  });
+
+  it('drops a placed island when the world is not bound yet', () => {
+    const stage = new Stage(makeHost(), new RealSpider());
+    const placed = new Group();
+    placed.name = 'placed';
+    stage.placeIsland(placed);
+    const source = vi.fn(async () => new Group());
+    stage.setIslandSource(source);
+    stage.retile();
+    expect(source).not.toHaveBeenCalled();
+    stage.bind(vi.fn(), () => makeWorld());
+    stage.start();
+    frame();
+    const scene = renderer().render.mock.calls.at(-1)?.[0] as { children: { name: string }[] };
+    expect(scene.children.some((child) => child.name === 'placed')).toBe(false);
+  });
+
+  it('ignores an island that arrives after a newer one was requested', async () => {
+    const stage = new Stage(makeHost(), new RealSpider());
+    stage.bind(vi.fn(), () => makeWorld());
+    stage.start();
+    let resolveStale: (group: Group) => void = () => {};
+    let resolveFresh: (group: Group) => void = () => {};
+    const stale = new Group();
+    stale.name = 'stale';
+    const fresh = new Group();
+    fresh.name = 'fresh';
+    stage.setIslandSource(
+      () =>
+        new Promise((resolve) => {
+          resolveStale = resolve;
+        }),
+    );
+    stage.retile();
+    stage.setIslandSource(
+      () =>
+        new Promise((resolve) => {
+          resolveFresh = resolve;
+        }),
+    );
+    stage.retile();
+    resolveStale(stale);
+    await Promise.resolve();
+    frame();
+    const names = (): string[] => {
+      const scene = renderer().render.mock.calls.at(-1)?.[0] as { children: { name: string }[] };
+      return scene.children.map((child) => child.name);
+    };
+    expect(names()).not.toContain('stale');
+    resolveFresh(fresh);
+    await Promise.resolve();
+    frame();
+    expect(names()).toContain('fresh');
+    expect(names()).not.toContain('stale');
+  });
+
+  it('ignores a failed island after a newer one was requested', async () => {
+    const stage = new Stage(makeHost(), new RealSpider());
+    stage.bind(vi.fn(), () => makeWorld());
+    stage.start();
+    let rejectStale: (error: Error) => void = () => {};
+    let resolveFresh: (group: Group) => void = () => {};
+    const fresh = new Group();
+    fresh.name = 'fresh';
+    stage.setIslandSource(
+      () =>
+        new Promise((_, reject) => {
+          rejectStale = reject;
+        }),
+    );
+    stage.retile();
+    stage.setIslandSource(
+      () =>
+        new Promise((resolve) => {
+          resolveFresh = resolve;
+        }),
+    );
+    stage.retile();
+    rejectStale(new Error('late'));
+    await Promise.resolve();
+    frame();
+    const scene = renderer().render.mock.calls.at(-1)?.[0] as { children: unknown[] };
+    expect(scene.children).toHaveLength(3);
+    resolveFresh(fresh);
+    await Promise.resolve();
+    frame();
+    const drawn = renderer().render.mock.calls.at(-1)?.[0] as { children: { name: string }[] };
+    expect(drawn.children.map((child) => child.name)).toContain('fresh');
+  });
+
   it('retile drops the baked island and builds it again', () => {
     const stage = new Stage(makeHost(), new RealSpider());
     stage.retile();
@@ -245,6 +406,18 @@ describe('world sync', () => {
     frame();
     expect(sound.grasp).toHaveBeenCalledTimes(1);
     expect(sound.place).not.toHaveBeenCalled();
+  });
+
+  it('lays seven carried props out in two rows', () => {
+    const stage = new Stage(makeHost(), new RealSpider());
+    const held = Array.from({ length: 7 }, (_, index) =>
+      entity({ id: `apple-${index}`, x: 0, y: 0, z: 0 }),
+    );
+    const current = makeWorld({ carrying: held });
+    stage.bind(vi.fn(), () => current);
+    stage.start();
+    frame();
+    expect(renderer().render).toHaveBeenCalled();
   });
 
   it('does not sound a place for a carried prop that vanished', () => {

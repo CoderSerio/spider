@@ -175,8 +175,6 @@ export function mountPanel(
     field('apiKey').value = settings.apiKey;
     field('contextTokens').value =
       settings.contextTokens == null ? '' : String(settings.contextTokens);
-    field('compact').checked = settings.compact;
-    field('compactKb').value = settings.compactKb == null ? '' : String(settings.compactKb);
   };
 
   const pages = { model: panelModel, memory: memoryPanel, usage: usagePanel } as const;
@@ -213,8 +211,6 @@ export function mountPanel(
       model: field('model').value,
       apiKey: field('apiKey').value,
       contextTokens: numberOrNull(field('contextTokens').value),
-      compact: field('compact').checked,
-      compactKb: numberOrNull(field('compactKb').value),
     });
     paint();
   };
@@ -484,7 +480,7 @@ export function mountPanel(
     const tailX = Math.max(14, Math.min(width - 14, point.x - left));
     trace.style.setProperty('--tail', `${tailX}px`);
     trace.dataset.tail = tail;
-    placeTail(tailNode, top, height, tailX, tail === 'down');
+    placeTail(tailNode, top, height, left + tailX, tail === 'down');
   });
 
   paint();

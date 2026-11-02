@@ -2,47 +2,115 @@ import { createNoise, fbm } from './noise.js';
 
 /** The island sits inside this square. Past the rim the ground is flat at 0. */
 export const TERRAIN = {
-  half: 36,
+  half: 52,
   /** Radius at which the hills have faded out. */
-  island: 30,
+  island: 50,
   /** Hills are back to full height past this radius. */
-  pad: 6,
+  pad: 8,
   /**
-   * Level disk around the birth nest. The woven nest reaches about 3 from the
-   * middle, so this has to clear that rim or the reeds sit inside the hill.
+   * Level disk around the birth nest. The mound now reaches about 4.2 from the
+   * middle, so this has to clear that rim or the nest sits inside the hill.
    */
-  flat: 4.4,
+  flat: 5.2,
   /** Ground mesh divisions. `surfaceAt` has to use this same grid. */
-  segments: 72,
+  segments: 104,
 } as const;
 
-const HEIGHT = 3.6;
+const GRID_VERTS = (TERRAIN.segments + 1) ** 2;
+
+/** Noise at every ground vertex. The page asks the world worker for this. */
+export function bakeTerrainGrid(seed: number): Float32Array {
+  const noise = createNoise(seed);
+  const warp = createNoise(seed ^ 0x9e3779b9);
+  // 直接从种子里取一个方向；不要再开一条随机流，地形构造要保持纯函数。
+  const angle = ((seed * 2654435761) % 6283) / 1000;
+  const cols = TERRAIN.segments + 1;
+  const grid = new Float32Array(cols * cols);
+  const half = TERRAIN.half;
+  const cell = (half * 2) / TERRAIN.segments;
+  for (let j = 0; j < cols; j++) {
+    const z = -half + j * cell;
+    const row = j * cols;
+    for (let i = 0; i < cols; i++) grid[row + i] = sample(noise, warp, angle, -half + i * cell, z);
+  }
+  return grid;
+}
 
 export class Terrain {
   readonly seed: number;
-  readonly #noise: (x: number, y: number) => number;
+  /** Analytic height at each ground vertex. Lookups interpolate this grid. */
+  readonly #grid: Float32Array;
 
-  constructor(seed: number) {
+  constructor(seed: number, grid?: Float32Array) {
     this.seed = seed >>> 0;
-    this.#noise = createNoise(this.seed);
+    if (grid && grid.length !== GRID_VERTS) throw new Error('bad terrain grid');
+    this.#grid = grid ?? bakeTerrainGrid(this.seed);
   }
 
-  /** World height at a horizontal point. The origin is flattened. */
+  /**
+   * World height at a horizontal point. This is the rendered triangle, not the
+   * raw noise: the mesh, the body, and loose props all read this grid.
+   * The noise is evaluated once, at the vertices, when the island is built.
+   */
   height(x: number, z: number): number {
-    const radius = Math.hypot(x, z);
-    const rim = radius / TERRAIN.island;
-    if (rim >= 1) return 0;
-    const edge = rim <= 0.72 ? 1 : (1 - rim) / 0.28;
-    const mask = edge * edge * (3 - 2 * edge);
-    let pad = 1;
-    if (radius <= TERRAIN.flat) pad = 0;
-    else if (radius < TERRAIN.pad) {
-      const u = (radius - TERRAIN.flat) / (TERRAIN.pad - TERRAIN.flat);
-      pad = u * u;
-    }
-    const n = fbm(this.#noise, x * 0.055, z * 0.055);
-    return n * HEIGHT * mask * pad;
+    const half = TERRAIN.half;
+    const segments = TERRAIN.segments;
+    if (x <= -half || z <= -half || x >= half || z >= half) return 0;
+    const cols = segments + 1;
+    const cell = (half * 2) / segments;
+    const ix = Math.min(segments - 1, Math.max(0, Math.floor((x + half) / cell)));
+    const iz = Math.min(segments - 1, Math.max(0, Math.floor((z + half) / cell)));
+    const x0 = -half + ix * cell;
+    const z0 = -half + iz * cell;
+    const fx = (x - x0) / cell;
+    const fz = (z - z0) / cell;
+    const h00 = this.#grid[iz * cols + ix];
+    const h10 = this.#grid[iz * cols + ix + 1];
+    const h01 = this.#grid[(iz + 1) * cols + ix];
+    const h11 = this.#grid[(iz + 1) * cols + ix + 1];
+    // Same split as PlaneGeometry: a-b-d when fx + fz <= 1, otherwise b-c-d.
+    if (fx + fz <= 1) return h00 * (1 - fx - fz) + h01 * fz + h10 * fx;
+    return h01 * (1 - fx) + h11 * (fx + fz - 1) + h10 * (1 - fz);
   }
+}
+
+/**
+ * Analytic height. The origin is flattened.
+ *
+ * 三层地形：扭曲过的 fbm 做缓坡，脊线噪声做山脊，再加一条随种子转向的
+ * 长坡，岛的边缘用低频噪声咬出不规则的海岸。近处压平给巢穴，远处收到 0。
+ */
+function sample(
+  noise: (x: number, y: number) => number,
+  warp: (x: number, y: number) => number,
+  angle: number,
+  x: number,
+  z: number,
+): number {
+  const radius = Math.hypot(x, z);
+  if (radius >= TERRAIN.island) return 0;
+  // 海岸只往里收，保证 island 之外永远是平的。
+  const coast =
+    TERRAIN.island * (0.86 + 0.11 * (noise(x * 0.016 + 11.3, z * 0.016 - 7.7) * 0.5 + 0.5));
+  const rim = radius / coast;
+  if (rim >= 1) return 0;
+  const edge = rim <= 0.8 ? 1 : (1 - rim) / 0.2;
+  const mask = edge * edge * (3 - 2 * edge);
+  let pad = 1;
+  if (radius <= TERRAIN.flat) pad = 0;
+  else if (radius < TERRAIN.pad) {
+    const u = (radius - TERRAIN.flat) / (TERRAIN.pad - TERRAIN.flat);
+    pad = u * u * (3 - 2 * u);
+  }
+
+  const wx = x + 6 * warp(x * 0.027 + 4.1, z * 0.027 - 3.7);
+  const wz = z + 6 * warp(x * 0.027 - 7.3, z * 0.027 + 5.9);
+  const base = fbm(noise, wx * 0.045, wz * 0.045);
+  const ridge = 1 - Math.abs(fbm(noise, wx * 0.075 + 13.1, wz * 0.075 - 5.7));
+  const axis = (x * Math.cos(angle) + z * Math.sin(angle)) / TERRAIN.island;
+  const h = base * 7 + (ridge - 0.5) * 3.4 + axis * 2.4;
+  // 不把低处压成 0：留出真正的谷地，巢穴外面才不是一圈等高的环。
+  return h * mask * pad;
 }
 
 /**

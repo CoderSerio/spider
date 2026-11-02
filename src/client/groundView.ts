@@ -1,40 +1,50 @@
 import {
+  BufferAttribute,
   BufferGeometry,
+  Float32BufferAttribute,
   Group,
   LineBasicMaterial,
   LineSegments,
   Mesh,
-  PlaneGeometry,
-  Vector3,
 } from 'three';
 import { PALETTE } from '../shared/config.js';
-import { paperMat } from '../shared/sim/parts.js';
-import { TERRAIN } from '../shared/terrain.js';
+import { groundAttributes, islandBuffers, type IslandBuffers } from '../shared/island.js';
+import { groundMat } from '../shared/sim/parts.js';
 
-const LINE_STEP = 2;
+const contourInk = new LineBasicMaterial({ color: PALETTE.ink, transparent: true, opacity: 0.2 });
+const contourMajor = new LineBasicMaterial({
+  color: PALETTE.ink,
+  transparent: true,
+  opacity: 0.34,
+});
 
-/** Paper island with ink grid lines draped over the same height function. */
+/** Paper island. Ink follows the slope in curves, plus the contour lines. */
 export function buildIsland(height: (x: number, z: number) => number): Group {
+  return islandGroup(islandBuffers(height));
+}
+
+/** Upload buffers the world worker already filled. */
+export function islandGroup(buffers: IslandBuffers): Group {
   const group = new Group();
-  const geo = groundGeometry(height, TERRAIN.half, TERRAIN.segments);
-  group.add(new Mesh(geo, paperMat));
+  const geo = new BufferGeometry();
+  geo.setAttribute('position', new Float32BufferAttribute(buffers.groundPosition, 3));
+  geo.setAttribute('color', new Float32BufferAttribute(buffers.groundColor, 3));
+  geo.setIndex(new BufferAttribute(buffers.groundIndex, 1));
+  geo.computeVertexNormals();
+  group.add(new Mesh(geo, groundMat));
 
   const ink = new LineBasicMaterial({ color: PALETTE.grid });
-  const points: Vector3[] = [];
-  const half = TERRAIN.half;
-  for (let x = -half; x <= half; x += LINE_STEP) {
-    for (let z = -half; z < half; z += LINE_STEP) {
-      points.push(new Vector3(x, height(x, z) + 0.02, z));
-      points.push(new Vector3(x, height(x, z + LINE_STEP) + 0.02, z + LINE_STEP));
-    }
-  }
-  for (let z = -half; z <= half; z += LINE_STEP) {
-    for (let x = -half; x < half; x += LINE_STEP) {
-      points.push(new Vector3(x, height(x, z) + 0.02, z));
-      points.push(new Vector3(x + LINE_STEP, height(x + LINE_STEP, z) + 0.02, z));
-    }
-  }
-  group.add(new LineSegments(new BufferGeometry().setFromPoints(points), ink));
+  const grid = new BufferGeometry();
+  grid.setAttribute('position', new Float32BufferAttribute(buffers.grid, 3));
+  group.add(new LineSegments(grid, ink));
+
+  const minor = new BufferGeometry();
+  minor.setAttribute('position', new Float32BufferAttribute(buffers.contourMinor, 3));
+  const major = new BufferGeometry();
+  major.setAttribute('position', new Float32BufferAttribute(buffers.contourMajor, 3));
+  const contours = new Group();
+  contours.add(new LineSegments(minor, contourInk), new LineSegments(major, contourMajor));
+  group.add(contours);
   return group;
 }
 
@@ -44,13 +54,11 @@ export function groundGeometry(
   half: number,
   segments: number,
 ): BufferGeometry {
-  const geo = new PlaneGeometry(half * 2, half * 2, segments, segments);
-  // PlaneGeometry faces +z in the xy plane. -90° about x lays it on xz facing +y.
-  geo.rotateX(-Math.PI / 2);
-  const position = geo.getAttribute('position');
-  for (let i = 0; i < position.count; i++) {
-    position.setY(i, height(position.getX(i), position.getZ(i)));
-  }
+  const baked = groundAttributes(height, half, segments);
+  const geo = new BufferGeometry();
+  geo.setAttribute('position', new Float32BufferAttribute(baked.groundPosition, 3));
+  geo.setAttribute('color', new Float32BufferAttribute(baked.groundColor, 3));
+  geo.setIndex(new BufferAttribute(baked.groundIndex, 1));
   geo.computeVertexNormals();
   return geo;
 }

@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { describe, expect, it } from 'vitest';
-import { Vector3 } from 'three';
+import { Matrix4, Vector3 } from 'three';
 import { GAIT } from '../../../src/shared/config.js';
 import { Spider } from '../../../src/shared/sim/Spider.js';
 
@@ -15,6 +15,31 @@ function mountWorld(spider: Spider, index: number): Vector3 {
 function specDir(spider: Spider, index: number): Vector3 {
   const spec = spider.legs[index].spec;
   return new Vector3(spec.x, 0, spec.z).normalize();
+}
+
+function shellClearance(spider: Spider, ground: (x: number, z: number) => number): number {
+  spider.root.updateMatrixWorld(true);
+  const point = new Vector3();
+  let worst = Infinity;
+  spider.chassis.traverse((node) => {
+    const geometry = (node as { geometry?: { getAttribute(name: string): MatrixAttr | undefined } })
+      .geometry;
+    const position = geometry?.getAttribute('position');
+    if (!position) return;
+    const world = (node as { matrixWorld: Matrix4 }).matrixWorld;
+    for (let i = 0; i < position.count; i++) {
+      point.set(position.getX(i), position.getY(i), position.getZ(i)).applyMatrix4(world);
+      worst = Math.min(worst, point.y - ground(point.x, point.z));
+    }
+  });
+  return worst;
+}
+
+interface MatrixAttr {
+  count: number;
+  getX(index: number): number;
+  getY(index: number): number;
+  getZ(index: number): number;
 }
 
 function worldRight(spider: Spider): Vector3 {
@@ -100,6 +125,18 @@ describe('Spider', () => {
     expect(spider.heightSet).toBeCloseTo(GAIT.heightMax);
     for (let i = 0; i < 80; i++) spider.update(0.1, { ...IDLE, lift: -1 });
     expect(spider.heightSet).toBeCloseTo(GAIT.heightMin);
+  });
+
+  it('keeps the shell above a steep face', () => {
+    const rise = 1.6;
+    const grounds = [(x: number, z: number) => -z * rise, (x: number, _z: number) => x * rise];
+    for (const ground of grounds) {
+      const spider = new Spider();
+      spider.yaw = 0.8;
+      spider.bindGround(ground);
+      for (let i = 0; i < 45; i++) spider.update(1 / 30, IDLE);
+      expect(shellClearance(spider, ground)).toBeGreaterThan(-0.02);
+    }
   });
 
   it('stops dead against a solid', () => {
@@ -198,11 +235,28 @@ describe('Spider', () => {
     expect(spider.legs.every((leg) => !leg.lifted)).toBe(true);
   });
 
-  it('shifts weight once still for a while', () => {
+  it('breathes in place instead of swaying', () => {
     const spider = new Spider();
-    spider.update(0.01);
-    for (let i = 0; i < 120; i++) spider.update(0.05);
-    expect(Number.isFinite(spider.chassis.rotation.z)).toBe(true);
+    spider.bindGround(() => 0);
+    const height: number[] = [];
+    let maxRoll = 0;
+    let maxPitch = 0;
+    for (let i = 0; i < 400; i++) {
+      spider.update(0.05);
+      height.push(spider.chassis.position.y);
+      maxRoll = Math.max(maxRoll, Math.abs(spider.chassis.rotation.z));
+      maxPitch = Math.max(maxPitch, Math.abs(spider.chassis.rotation.x));
+    }
+    expect(maxRoll).toBeLessThan(0.01);
+    expect(maxPitch).toBeLessThan(0.01);
+    expect(Math.max(...height) - Math.min(...height)).toBeGreaterThan(0.03);
+    expect(Math.max(...height)).toBeLessThan(0.05);
+    expect(spider.legs.every((leg) => !leg.lifted)).toBe(true);
+    for (const leg of spider.legs) expect(leg.foot.y).toBeCloseTo(GAIT.footY);
+    expect(Math.abs(spider.headYaw)).toBeLessThan(0.02);
+
+    spider.update(0.05, { ...IDLE, throttle: 1 });
+    expect(spider.chassis.position.y).toBe(0);
   });
 
   it('handles a foot with no horizontal reach from its shoulder', () => {

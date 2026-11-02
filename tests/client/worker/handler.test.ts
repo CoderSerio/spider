@@ -17,8 +17,6 @@ const SETTINGS: PilotSettings = {
   model: 'model-1',
   apiKey: 'key',
   contextTokens: null,
-  compact: false,
-  compactKb: null,
   autoMemory: false,
 };
 
@@ -27,7 +25,7 @@ function record(seq = 1, over: Partial<WorldRecord> = {}): WorldRecord {
   return {
     ...body,
     id: 'current',
-    format: 1,
+    format: 3,
     savedAt: Date.now(),
     day: localDate(new Date()),
     owner: 'owner',

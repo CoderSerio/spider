@@ -10,12 +10,31 @@ export interface EatSpec {
   removes: boolean;
 }
 
+/**
+ * How a thing takes part in the shared solver.
+ * Every kind has one. Motion is not a special case written for one prop.
+ */
+export interface PhysicsSpec {
+  /** Soft things can be walked through. Solid things block. */
+  solid: boolean;
+  /**
+   * Horizontal contact radius. 0 sits on the ground sample at its anchor.
+   * A positive radius is lifted to the highest ground under that disc.
+   */
+  radius: number;
+  /** The shared solver moves it: slope, contact, and neighbors. */
+  loose: boolean;
+  /** A round loose body spins as it travels. The angle is arc length / radius. */
+  rolls: boolean;
+}
+
 export interface KindSpec {
   /** Sensed qualities. Only the ones that apply. */
   properties: readonly string[];
   eat?: EatSpec;
   /** How far above the ground the origin sits. */
   rest: number;
+  physics?: PhysicsSpec;
 }
 
 const EMPTY_PROPERTIES: readonly string[] = Object.freeze([]);
@@ -25,9 +44,18 @@ export const KINDS: Record<string, KindSpec> = {
     properties: ['edible', 'carryable'],
     eat: { duration: 3, stages: 2, removes: true },
     rest: 0,
+    physics: { solid: true, radius: 0.36, loose: true, rolls: true },
   },
-  grass: { properties: ['cover'], rest: 0 },
-  nest: { properties: ['home'], rest: 0 },
+  grass: {
+    properties: ['cover'],
+    rest: 0,
+    physics: { solid: false, radius: 0, loose: false, rolls: false },
+  },
+  nest: {
+    properties: ['home'],
+    rest: 0,
+    physics: { solid: true, radius: 0, loose: false, rolls: false },
+  },
 };
 
 export function kindOf(kind: string): KindSpec | null {
