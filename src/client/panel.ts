@@ -1,7 +1,9 @@
-import { Diary } from './journal/diary.js';
+import { openJournal, type Journal, type OpenedJournal } from './journal/api.js';
+import { flushSoon, flushWorld, onRestore, setPending, type BootNote } from './worldStore.js';
 import { localDate } from './journal/dates.js';
 import type { Trace } from './journal/session.js';
-import { formatTokens, readUsage, recordUsage, type UsageSnapshot } from './journal/usage.js';
+import { formatTokens } from './journal/tokens.js';
+import type { UsageSnapshot } from './journal/usage.js';
 import { pilotReady, readPilot, writePilot, type PilotSettings } from './settings.js';
 import type { Stage } from './stage.js';
 import type { SimSession } from '../shared/sim/session.js';
@@ -13,7 +15,13 @@ export const AUTO_MEMORY_IDLE_MS = 30 * 60 * 1000;
 const AUTO_MEMORY_CHECK_MS = 60 * 1000;
 
 /** Settings, the instruction box, and the bubble that follows the spider. */
-export function mountPanel(doc: Document, session: SimSession, stage: Stage): void {
+export function mountPanel(
+  doc: Document,
+  session: SimSession,
+  stage: Stage,
+  note?: BootNote,
+  injected?: Promise<OpenedJournal | null> | OpenedJournal,
+): void {
   const form = doc.querySelector<HTMLFormElement>('#pilot');
   const goal = doc.querySelector<HTMLInputElement>('#goal');
   const send = doc.querySelector<HTMLButtonElement>('#pilot-send');
@@ -102,6 +110,11 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
   let live: HTMLLIElement | null = null;
   let hideAt = 0;
 
+  let touched = false;
+  goal.addEventListener('input', () => {
+    touched = true;
+  });
+
   const paint = (): void => {
     const settings = readPilot();
     const ready = pilotReady(settings);
@@ -124,6 +137,19 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
     touch();
     if (kind === 'speech' || kind === 'thought') stage.voice();
   };
+
+  if (note?.cause === 'format') show('这只蜘蛛是更新的页面留下的，这个页面接不上。', 'note');
+  else if (note?.cause === 'malformed') show('上次的地方读不出来，这是一片新的。', 'note');
+  else if (note?.pendingText) {
+    goal.value = note.pendingText;
+    show('上次没做完。这句话还在框里。', 'note');
+  }
+  onRestore((arrived) => {
+    stage.retile();
+    if (touched || !arrived.pendingText) return;
+    goal.value = arrived.pendingText;
+    show('上次没做完。这句话还在框里。', 'note');
+  });
 
   const say = (chunk: string): void => {
     if (!chunk) return;
@@ -191,16 +217,17 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
   settingsForm.addEventListener('submit', persist);
   dialog.addEventListener('close', persist);
 
-  let diary: Diary | null = null;
+  let journal: Journal | null = null;
   let lastActivity = Date.now();
   let digesting = false;
   /** When a failed digest may be tried again. */
   let digestRetryAt = 0;
-  const diaryReady = Diary.open()
+  const journalReady = Promise.resolve(injected ?? openJournal())
     .then((opened) => {
-      diary = opened;
-      void opened.backfill(readPilot()).catch(() => undefined);
-      return opened;
+      if (!opened) return null;
+      journal = opened.journal;
+      void opened.journal.backfill(readPilot()).catch(() => undefined);
+      return opened.journal;
     })
     .catch(() => null);
 
@@ -215,7 +242,7 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
   const rememberIfIdle = (): void => {
     if (current || digesting) return;
     const settings = readPilot();
-    const opened = diary;
+    const opened = journal;
     if (!settings.autoMemory) return;
     if (!opened?.behind()) return;
     if (Date.now() - lastActivity < AUTO_MEMORY_IDLE_MS) return;
@@ -240,7 +267,7 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
   };
 
   const showMemory = async (): Promise<void> => {
-    const opened = diary ?? (await diaryReady);
+    const opened = journal ?? (await journalReady);
     /* v8 ignore next */
     if (!opened) return;
     const pages = await opened.pages();
@@ -284,8 +311,10 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
 
   const refreshUsage = async (): Promise<void> => {
     const today = localDate(new Date());
+    const opened = journal ?? (await journalReady);
     try {
-      renderUsage(await readUsage(today));
+      if (!opened) throw new Error('no journal');
+      renderUsage(await opened.readUsage(today));
     } catch {
       renderUsage({
         today: { date: today, input: 0, output: 0, total: 0, calls: 0, cacheRead: 0, reasoning: 0 },
@@ -306,14 +335,14 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
     writePilot({ ...readPilot(), autoMemory: autoMemoryInput.checked });
   });
   dateSelect.addEventListener('change', () => {
-    void diary?.read(dateSelect.value).then((page) => {
+    void journal?.read(dateSelect.value).then((page) => {
       if (page) fillMemory(page);
     });
   });
   memoryForm.addEventListener('submit', () => {
-    if (!diary) return;
-    const date = dateSelect.value || diary.date;
-    void diary.write({
+    if (!journal) return;
+    const date = dateSelect.value || journal.date;
+    void journal.write({
       date,
       line: lineInput.value,
       noted: notedInput.value,
@@ -322,13 +351,13 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
   });
 
   leaveClose.addEventListener('click', () => {
-    if (diary) diary.dismissed = true;
+    if (journal) journal.dismissed = true;
     leave.close();
   });
   leaveSummarize.addEventListener('click', () => {
-    if (!diary) return;
+    if (!journal) return;
     leaveSummarize.disabled = true;
-    void diary
+    void journal
       .digest(readPilot())
       .then(() => {
         show('记下了。这个页面可以关掉了。', 'note');
@@ -345,15 +374,21 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
   window.addEventListener('beforeunload', (event) => {
     // Vite reloads this page on each save. That is not the user leaving.
     if (import.meta.env.MODE === 'development') return;
-    if (!diary?.behind()) return;
+    if (!journal?.behind()) return;
     event.preventDefault();
     window.setTimeout(() => {
       if (!leave.open) leave.showModal();
     }, 0);
   });
   window.addEventListener('pagehide', () => {
-    void diary?.save();
+    void journal?.save();
   });
+
+  const release = (controller: AbortController): void => {
+    if (replaced.has(controller)) return;
+    setPending(null);
+    flushWorld('poke');
+  };
 
   const run = async (
     controller: AbortController,
@@ -363,10 +398,14 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
     let sawText = false;
     const traces: Trace[] = [];
     let pending: { name: string; input: unknown } | null = null;
+    lastActivity = Date.now();
+    setPending({ text, tool: null });
+    flushWorld('poke');
     try {
-      const opened = diary ?? (await diaryReady);
+      const opened = journal ?? (await journalReady);
       if (controller.signal.aborted) {
         if (!replaced.has(controller)) show('已停止', 'note');
+        release(controller);
         return;
       }
       const { runAgent } = await import('./agent/loop.js');
@@ -387,6 +426,8 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
               break;
             case 'tool-call':
               pending = { name: event.name, input: event.input };
+              setPending({ text, tool: event.name });
+              flushSoon('poke');
               show(thoughtOf(event.input), 'thought');
               break;
             case 'tool-result':
@@ -396,6 +437,7 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
                 output: event.output,
               });
               pending = null;
+              flushSoon('poke');
               break;
             case 'error':
               show(explain(event.message), 'note');
@@ -406,21 +448,30 @@ export function mountPanel(doc: Document, session: SimSession, stage: Stage): vo
         },
       });
       const answer = reply.text;
-      await recordUsage(reply.usage);
-      if (opened && !controller.signal.aborted) {
-        try {
-          await opened.record(text, answer, traces, settings);
-        } catch (error) {
-          show(explain(error instanceof Error ? error.message : String(error)), 'note');
-        }
-      }
-      if (usageDialog.open) await refreshUsage();
+      await opened?.recordUsage(reply.usage);
       if (controller.signal.aborted) {
         if (!replaced.has(controller)) show('已停止', 'note');
-      } else if (!sawText && answer.trim()) show(answer.trim(), 'speech');
+        release(controller);
+      } else {
+        let recorded = !opened;
+        let failed = false;
+        if (opened) {
+          try {
+            await opened.record(text, answer, traces, settings);
+            recorded = true;
+          } catch (error) {
+            failed = true;
+            show(explain(error instanceof Error ? error.message : String(error)), 'note');
+          }
+        }
+        if (recorded) release(controller);
+        if (!failed && !sawText && answer.trim()) show(answer.trim(), 'speech');
+      }
+      if (usageDialog.open) await refreshUsage();
     } catch (error) {
       if (controller.signal.aborted || isAbort(error)) {
         if (!replaced.has(controller)) show('已停止', 'note');
+        release(controller);
       } else show(explain(error instanceof Error ? error.message : String(error)), 'note');
     } finally {
       if (current === controller) {
