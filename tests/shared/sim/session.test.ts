@@ -72,15 +72,20 @@ describe('SimSession basics', () => {
     expect(snapshot.state.feet).toHaveLength(8);
   });
 
-  it('stops cleanly when nothing was started', () => {
-    const session = new SimSession(3);
-    session.stop();
-  });
-
   it('ignores negative frame steps', () => {
     const session = new SimSession(3);
     session.frame(-5);
     expect(session.spider.time).toBe(0);
+  });
+
+  it('senses the body without scanning the island', () => {
+    const session = new SimSession(3);
+    const sense = session.sense();
+    expect(sense.home).toBe(true);
+    expect(sense.ahead).toBeDefined();
+    expect(sense).not.toHaveProperty('entities');
+    expect(sense).not.toHaveProperty('ways');
+    expect(session.sense(true).ways?.length).toBeGreaterThan(0);
   });
 
   it('observes at the asked distance, clamped', () => {
@@ -95,35 +100,6 @@ describe('SimSession basics', () => {
     const grass = session.world.entities.find((entity) => entity.kind === 'grass')!;
     session.spider.root.position.set(grass.x, 0, grass.z);
     expect(session.observe(16).view).toBe(4.5);
-  });
-
-  it('runs its own clock while started', () => {
-    vi.useFakeTimers({
-      toFake: ['performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'],
-    });
-    const session = new SimSession(3);
-    session.start();
-    session.start();
-    vi.advanceTimersByTime(64);
-    expect(session.spider.time).toBeGreaterThan(0);
-    expect(session.spider.time).toBeLessThan(0.1);
-    const seen = session.spider.time;
-    session.stop();
-    vi.advanceTimersByTime(200);
-    expect(session.spider.time).toBe(seen);
-  });
-
-  it('accumulates sub-steps in tick', () => {
-    vi.useFakeTimers({
-      toFake: ['performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'],
-    });
-    const session = new SimSession(3);
-    vi.advanceTimersByTime(8);
-    session.tick();
-    expect(session.spider.time).toBe(0);
-    vi.advanceTimersByTime(100);
-    session.tick();
-    expect(session.spider.time).toBeGreaterThan(0);
   });
 });
 

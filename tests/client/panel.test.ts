@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetSpiderDb } from '../../src/client/journal/db.js';
 import { Diary } from '../../src/client/journal/diary.js';
-import { localDate, shiftDate } from '../../src/client/journal/dates.js';
+import { localDate, shiftDate } from '../../src/shared/dates.js';
 import * as usageLedger from '../../src/client/journal/usage.js';
 import { summarizeDiary } from '../../src/client/journal/summarize.js';
 import { AUTO_MEMORY_IDLE_MS, mountPanel } from '../../src/client/panel.js';
@@ -824,14 +824,14 @@ describe('diary panel', () => {
       baseURL: 'https://example.com',
       model: 'model-1',
       apiKey: 'key',
-      contextTokens: 4096,
+      contextTokens: 4,
       compact: true,
       compactKb: 400,
     });
     mount();
     clickButton('#settings-open');
     clickButton('#menu-model');
-    expect(field('contextTokens').value).toBe('4096');
+    expect(field('contextTokens').value).toBe('4');
     expect(field('compact').checked).toBe(true);
     expect(field('compactKb').value).toBe('400');
     writePilot({ baseURL: 'https://example.com', model: 'model-1', apiKey: 'key' });
@@ -1140,9 +1140,9 @@ describe('pilot number fields', () => {
     input.value = '12.5';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     expect(readPilot().contextTokens).toBeNull();
-    input.value = '4096';
+    input.value = '8';
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    expect(readPilot().contextTokens).toBe(4096);
+    expect(readPilot().contextTokens).toBe(8);
     input.value = '';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     expect(readPilot().contextTokens).toBeNull();

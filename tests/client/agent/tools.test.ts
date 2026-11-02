@@ -6,7 +6,6 @@ import { GRASS_VIEW, REACH, VIEW_DISTANCE } from '../../../src/shared/world.js';
 
 const observation: Observation = {
   time: 0,
-  seed: 1,
   view: VIEW_DISTANCE,
   beyond: 0,
   hidden: 0,
@@ -24,7 +23,6 @@ const observation: Observation = {
     ahead: { open: 8, by: 'clear', id: null, kind: null },
     nearby: [],
     ways: ['正前方可以走 8 米。'],
-    legsLifting: [],
   },
   entities: [],
 };
@@ -45,6 +43,11 @@ function execute(tool: { execute?: unknown }, input: unknown): Promise<unknown> 
 beforeEach(() => {
   session = {
     observe: vi.fn(() => observation),
+    sense: vi.fn((withWays = false) => {
+      if (withWays) return observation.self;
+      const { ways: _ways, nearby: _nearby, ...self } = observation.self;
+      return self;
+    }),
     walk: vi.fn(async () => outcome()),
     turn: vi.fn(async () => outcome()),
     turnTo: vi.fn(async () => outcome()),
@@ -86,9 +89,7 @@ describe('spiderTools', () => {
     const result = (await execute(tools.observe, { distance: 3 })) as Record<string, unknown>;
     expect(session.observe).toHaveBeenCalledWith(3);
     expect(result).toMatchObject({ ok: true, observation });
-    expect(result.ahead).toBe(observation.self.ahead);
-    expect(result.nearby).toBe(observation.self.nearby);
-    expect(result.ways).toBe(observation.self.ways);
+    expect(result).not.toHaveProperty('ahead');
   });
 
   it('observes the full view when no distance is given', async () => {
@@ -97,14 +98,28 @@ describe('spiderTools', () => {
     expect(session.observe).toHaveBeenCalledWith(VIEW_DISTANCE);
   });
 
-  it('uses the full view by default and strips the halt field', async () => {
+  it('returns only body state for an action, and strips the halt field', async () => {
     const tools = spiderTools(session as unknown as SimSession);
     session.walk.mockResolvedValue(outcome({ halt: 'solid', achieved: 1 }));
     const result = (await execute(tools.walk, { distance: 2 })) as Record<string, unknown>;
-    expect(session.observe).toHaveBeenCalledWith(VIEW_DISTANCE);
+    expect(session.sense).toHaveBeenCalledWith(false);
+    expect(session.observe).not.toHaveBeenCalled();
     expect(session.walk).toHaveBeenCalledWith(2, false);
     expect(result).not.toHaveProperty('halt');
+    expect(result).not.toHaveProperty('observation');
     expect(result.achieved).toBe(1);
+    expect(result.self).not.toHaveProperty('ways');
+  });
+
+  it('attaches ways when a walk is blocked', async () => {
+    const tools = spiderTools(session as unknown as SimSession);
+    for (const reason of ['blocked', 'steep', 'no-path'] as const) {
+      session.sense.mockClear();
+      session.walk.mockResolvedValue(outcome({ reason }));
+      const result = (await execute(tools.walk, { distance: 2 })) as Record<string, unknown>;
+      expect(session.sense).toHaveBeenCalledWith(true);
+      expect(result.self).toHaveProperty('ways');
+    }
   });
 
   it('passes movement arguments through', async () => {
@@ -218,6 +233,7 @@ describe('spiderTools', () => {
       execute(tools.memory, { command: 'write', date: '2026-11-02', noted: '不要吃红的' }),
     ).resolves.toMatchObject({ ok: true, noted: '不要吃红的' });
     expect(session.observe).not.toHaveBeenCalled();
+    expect(session.sense).not.toHaveBeenCalled();
   });
 
   it('advertises the sense limits in the observe description', () => {

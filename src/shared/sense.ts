@@ -15,12 +15,12 @@ export interface Ahead {
   by: 'clear' | 'wall' | 'slope';
   /** The solid's id, when by is wall. */
   id: string | null;
-  kind: 'nest' | 'building' | null;
+  kind: 'nest' | 'solid' | null;
 }
 
 export interface NearbySolid {
   id: string;
-  kind: 'nest' | 'building';
+  kind: 'nest' | 'solid';
   /** Distance from you to the nearest point of it. */
   distance: number;
   /** Degrees off your heading, clockwise positive. 0 is straight ahead. */
@@ -32,15 +32,32 @@ const round = (value: number, places = 2): number => {
   return Math.round(value * scale) / scale;
 };
 
-function kindOfBlock(id: string): 'nest' | 'building' {
-  return id.startsWith('nest') ? 'nest' : 'building';
+function kindOfBlock(id: string): 'nest' | 'solid' {
+  return id.startsWith('nest') ? 'nest' : 'solid';
 }
 
 interface Probe {
   open: number;
   by: 'clear' | 'wall' | 'slope';
   id: string | null;
-  kind: 'nest' | 'building' | null;
+  kind: 'nest' | 'solid' | null;
+}
+
+/**
+ * What the heading runs into. One probe, without the nearby list or the
+ * turn-by-turn sentences: an action that only reports the body does not need
+ * to scan 24 headings.
+ */
+export function aheadAt(
+  x: number,
+  z: number,
+  heading: number,
+  height: (x: number, z: number) => number,
+  blocks: readonly Block[],
+): Ahead {
+  const here = blockAt(x, z, blocks);
+  if (here) return { open: 0, by: 'wall', id: here.id, kind: kindOfBlock(here.id) };
+  return probe(x, z, heading, height, blocks);
 }
 
 /** Heading 0 faces world -Z. Clockwise is positive, matching the body's turn. */
@@ -82,6 +99,17 @@ function lineOf(sample: { bearing: number; open: number }): string {
   return Math.abs(sample.bearing) < 12
     ? `正前方可以走 ${meters(sample.open)} 米。`
     : `相对朝向转 ${Math.round(sample.bearing)} 度（正数顺时针）后，可以走 ${meters(sample.open)} 米。`;
+}
+
+/** Turn sentences for the current heading. Used when a walk is blocked. */
+export function waysAt(
+  x: number,
+  z: number,
+  heading: number,
+  height: (x: number, z: number) => number,
+  blocks: readonly Block[],
+): string[] {
+  return waysFrom(x, z, heading, height, blocks);
 }
 
 /** Sentences the agent can follow: which way is walkable, and how far. */
@@ -130,10 +158,7 @@ export function senseBody(
   height: (x: number, z: number) => number,
   blocks: readonly Block[],
 ): { ahead: Ahead; nearby: NearbySolid[]; ways: string[] } {
-  const facing = probe(x, z, heading, height, blocks);
-  let ahead: Ahead = facing;
-  const here = blockAt(x, z, blocks);
-  if (here) ahead = { open: 0, by: 'wall', id: here.id, kind: kindOfBlock(here.id) };
+  const ahead = aheadAt(x, z, heading, height, blocks);
 
   const nearby: NearbySolid[] = [];
   for (const block of blocks) {

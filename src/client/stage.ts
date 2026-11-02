@@ -2,10 +2,7 @@ import {
   Group,
   MathUtils,
   PerspectiveCamera,
-  Plane,
-  Raycaster,
   Scene,
-  Vector2,
   Vector3,
   WebGLRenderer,
   type BufferGeometry,
@@ -13,7 +10,7 @@ import {
 } from 'three';
 import { PALETTE } from '../shared/config.js';
 import { TERRAIN } from '../shared/terrain.js';
-import type { WorldState } from '../shared/state.js';
+import type { EntityState, WorldState } from '../shared/state.js';
 import type { Spider } from '../shared/sim/Spider.js';
 import { buildIsland } from './groundView.js';
 import { ObserveOverlay } from './observeView.js';
@@ -42,11 +39,7 @@ const VIEW = {
 const local = new Vector3();
 const look = new Vector3();
 const desired = new Vector3();
-const groundHit = new Vector3();
 const bubbleAt = new Vector3();
-const ndc = new Vector2();
-const groundPlane = new Plane(new Vector3(0, 1, 0), 0);
-const raycaster = new Raycaster();
 
 /** Renderer and camera. It steps the one spider, then paints that same spider. */
 export class Stage {
@@ -70,6 +63,8 @@ export class Stage {
   readonly #wasLifted: boolean[] = [];
   /** Ids on the back last frame. Null until the first sync, so birth is silent. */
   #carried: Set<string> | null = null;
+  /** Reused so an idle frame does not allocate a set of ids. */
+  readonly #alive = new Set<string>();
   #halt: 'clear' | 'solid' | 'steep' = 'clear';
 
   #yaw: number = VIEW.yaw;
@@ -82,11 +77,6 @@ export class Stage {
   #dragging = false;
   #pointerX = 0;
   #pointerY = 0;
-  #downX = 0;
-  #downY = 0;
-  #placeMode = false;
-  /** Called when the user clicks the ground while place mode is on. */
-  onGroundClick: ((x: number, z: number) => void) | null = null;
   /** Advance the one simulation, then read its world for the props. */
   #step: ((dt: number) => void) | null = null;
   #world: (() => WorldState) | null = null;
@@ -156,6 +146,7 @@ export class Stage {
     }
     this.#drapedGrass.clear();
     this.#carried = null;
+    this.#observe.reset();
     this.#syncWorld();
   }
 
@@ -167,63 +158,35 @@ export class Stage {
       this.#scene.add(this.#island);
     }
 
-    const alive = new Set<string>();
-    const shown = world.entities.map((entity) => ({
-      entity,
-      x: entity.x,
-      y: entity.y,
-      z: entity.z,
-    }));
-    const carrying = new Set(world.carrying.map((item) => item.id));
-    if (this.#carried) {
-      for (const id of carrying) if (!this.#carried.has(id)) this.#sound.grasp();
-      for (const id of this.#carried) {
-        if (carrying.has(id)) continue;
-        if (world.entities.some((item) => item.id === id)) this.#sound.place();
+    const held = world.carrying;
+    const carried = this.#carried;
+    if (!carried || carried.size !== held.length || held.some((item) => !carried.has(item.id))) {
+      if (carried) {
+        for (const item of held) if (!carried.has(item.id)) this.#sound.grasp();
+        for (const id of carried) {
+          if (held.some((item) => item.id === id)) continue;
+          if (world.entities.some((item) => item.id === id)) this.#sound.place();
+        }
       }
+      this.#carried = new Set(held.map((item) => item.id));
     }
-    this.#carried = carrying;
 
-    const back = world.carrying.length;
+    const alive = this.#alive;
+    alive.clear();
+    for (const entity of world.entities) {
+      alive.add(entity.id);
+      this.#syncProp(entity, entity.x, entity.y, entity.z, world);
+    }
+
+    const back = this.#spider.root.position;
     const yaw = this.#spider.yaw;
     const fx = -Math.sin(yaw);
     const fz = -Math.cos(yaw);
-    world.carrying.forEach((carried, index) => {
-      const along = (index - (back - 1) / 2) * 0.42;
-      shown.push({
-        entity: carried,
-        x: this.#spider.root.position.x - fx * along,
-        y: this.#spider.root.position.y + 0.95,
-        z: this.#spider.root.position.z - fz * along,
-      });
-    });
-    for (const { entity, x, y, z } of shown) {
-      alive.add(entity.id);
-      const previous = this.#stages.get(entity.id);
-      let prop = this.#props.get(entity.id);
-      if (prop && previous !== entity.stage) {
-        disposeGeometries(prop);
-        this.#scene.remove(prop);
-        this.#props.delete(entity.id);
-        this.#drapedGrass.delete(entity.id);
-        prop = undefined;
-        if (previous != null && entity.stage > previous) this.#sound.bite();
-      }
-      if (!prop) {
-        const built = buildProp(entity.kind, entity.stage, entity.footprint);
-        if (!built) continue;
-        prop = built;
-        this.#props.set(entity.id, prop);
-        this.#scene.add(prop);
-      }
-      this.#stages.set(entity.id, entity.stage);
-      if (entity.kind === 'grass') {
-        const draped = this.#drapedGrass.get(entity.id);
-        if (!draped || draped.x !== x || draped.z !== z || draped.terrain !== world.terrain) {
-          drapeGrass(prop, x, z, (px, pz) => world.terrain.height(px, pz));
-          this.#drapedGrass.set(entity.id, { x, z, terrain: world.terrain });
-        }
-      } else prop.position.set(x, y, z);
+    for (let index = 0; index < held.length; index++) {
+      const item = held[index];
+      alive.add(item.id);
+      const along = (index - (held.length - 1) / 2) * 0.42;
+      this.#syncProp(item, back.x - fx * along, back.y + 0.95, back.z - fz * along, world);
     }
 
     for (const [id, prop] of this.#props) {
@@ -237,14 +200,40 @@ export class Stage {
     }
   }
 
+  /** Draw one entity, rebuilding it only when its bite stage changes. */
+  #syncProp(entity: EntityState, x: number, y: number, z: number, world: WorldState): void {
+    const previous = this.#stages.get(entity.id);
+    let prop = this.#props.get(entity.id);
+    if (prop && previous !== entity.stage) {
+      disposeGeometries(prop);
+      this.#scene.remove(prop);
+      this.#props.delete(entity.id);
+      this.#drapedGrass.delete(entity.id);
+      prop = undefined;
+      if (previous != null && entity.stage > previous) this.#sound.bite();
+    }
+    if (!prop) {
+      const built = buildProp(entity.kind, entity.stage, entity.footprint);
+      if (!built) return;
+      prop = built;
+      this.#props.set(entity.id, prop);
+      this.#scene.add(prop);
+    }
+    this.#stages.set(entity.id, entity.stage);
+    if (entity.kind === 'grass') {
+      const draped = this.#drapedGrass.get(entity.id);
+      if (!draped || draped.x !== x || draped.z !== z || draped.terrain !== world.terrain) {
+        drapeGrass(prop, x, z, (px, pz) => world.terrain.height(px, pz));
+        this.#drapedGrass.set(entity.id, { x, z, terrain: world.terrain });
+      }
+    } else if (prop.position.x !== x || prop.position.y !== y || prop.position.z !== z) {
+      prop.position.set(x, y, z);
+    }
+  }
+
   /** A quiet tick for words appearing beside the spider. */
   voice(): void {
     this.#sound.voice();
-  }
-
-  setPlaceMode(enabled: boolean): void {
-    this.#placeMode = enabled;
-    this.#renderer.domElement.style.cursor = enabled ? 'crosshair' : '';
   }
 
   dispose(): void {
@@ -276,32 +265,12 @@ export class Stage {
     this.#dragging = true;
     this.#pointerX = event.clientX;
     this.#pointerY = event.clientY;
-    this.#downX = event.clientX;
-    this.#downY = event.clientY;
     this.#renderer.domElement.setPointerCapture(event.pointerId);
   };
 
-  #onPointerUp = (event: PointerEvent): void => {
-    const wasDragging = this.#dragging;
+  #onPointerUp = (): void => {
     this.#dragging = false;
-    if (!this.#placeMode || !wasDragging) return;
-    // A drag orbits the camera; only a near-stationary release plants a prop.
-    if (Math.hypot(event.clientX - this.#downX, event.clientY - this.#downY) > 6) return;
-    const point = this.#groundPoint(event);
-    if (point) this.onGroundClick?.(point.x, point.z);
   };
-
-  #groundPoint(event: PointerEvent): { x: number; z: number } | null {
-    const rect = this.#renderer.domElement.getBoundingClientRect();
-    ndc.set(
-      ((event.clientX - rect.left) / rect.width) * 2 - 1,
-      -((event.clientY - rect.top) / rect.height) * 2 + 1,
-    );
-    raycaster.setFromCamera(ndc, this.#camera);
-    return raycaster.ray.intersectPlane(groundPlane, groundHit)
-      ? { x: groundHit.x, z: groundHit.z }
-      : null;
-  }
 
   #onPointerMove = (event: PointerEvent): void => {
     if (!this.#dragging) return;

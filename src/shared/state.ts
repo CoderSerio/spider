@@ -1,5 +1,5 @@
 import { propertiesOf } from './kinds.js';
-import { senseBody, type Ahead, type NearbySolid } from './sense.js';
+import { aheadAt, senseBody, waysAt, type Ahead, type NearbySolid } from './sense.js';
 import { grassHere, insideHome, occluded } from './sight.js';
 
 /** Serializable simulation state, world state, and the observation format. */
@@ -92,8 +92,6 @@ export interface Carried {
 
 export interface Observation {
   time: number;
-  /** Rebuilds this same island. */
-  seed: number;
   /** How far this look actually reached. */
   view: number;
   /** Left out because they sit past view. */
@@ -124,16 +122,28 @@ export interface Observation {
     nearby: NearbySolid[];
     /** Computed sentences: which relative turn is walkable, and for how far. */
     ways: string[];
-    /** Indices of legs off the ground right now. */
-    legsLifting: number[];
   };
   entities: SeenEntity[];
 }
 
-/** A foot above this height is mid-swing rather than planted. */
-const GROUND_LIFT = 0.17;
-
-const REACH_Y = 1.6;
+/** The body's own state, without the island around it. */
+export type Sense = Pick<
+  Observation['self'],
+  | 'x'
+  | 'y'
+  | 'z'
+  | 'ground'
+  | 'heading'
+  | 'height'
+  | 'speed'
+  | 'cover'
+  | 'home'
+  | 'carrying'
+  | 'ahead'
+> & {
+  /** Present when the outcome was blocked, steep, or no-path. */
+  ways?: string[];
+};
 
 /** Compass-style degrees from a three.js yaw. */
 export function toHeading(yaw: number): number {
@@ -145,11 +155,48 @@ export function wrapDegrees(degrees: number): number {
   return wrapped === -180 ? 180 : wrapped;
 }
 
+/** Split the difference for the wire: three places, a number, no string. */
+function round3(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+/**
+ * The body alone. One heading probe. `withWays` also scans 24 headings for
+ * turn sentences, which a blocked action attaches so the next turn needs no observe.
+ */
+export function toSense(state: SpiderState, world: WorldState, withWays = false): Sense {
+  const heading = toHeading(state.yaw);
+  const px = state.position.x;
+  const pz = state.position.z;
+  const height = (x: number, z: number) => world.terrain.height(x, z);
+  const sense: Sense = {
+    x: round3(px),
+    y: round3(state.position.y),
+    z: round3(pz),
+    ground: round3(world.terrain.height(px, pz)),
+    heading: Math.round(heading * 10) / 10,
+    height: round3(state.height),
+    speed: round3(state.speed),
+    cover: grassHere(px, pz, world.entities) ? 'grass' : null,
+    home: insideHome(px, pz),
+    carrying: world.carrying.map((item) => ({
+      id: item.id,
+      kind: item.kind,
+      stage: item.stage,
+      properties: propertiesOf(item.kind),
+    })),
+    ahead: aheadAt(px, pz, heading, height, world.blocks),
+  };
+  if (withWays) sense.ways = waysAt(px, pz, heading, height, world.blocks);
+  return sense;
+}
+
 export function toObservation(
   state: SpiderState,
   world: WorldState,
   reach: number,
   view: number,
+  reachY: number,
 ): Observation {
   const heading = toHeading(state.yaw);
   const seen: SeenEntity[] = [];
@@ -176,14 +223,14 @@ export function toObservation(
     seen.push({
       id: entity.id,
       kind: entity.kind,
-      x: Number(entity.x.toFixed(3)),
-      y: Number(entity.y.toFixed(3)),
-      z: Number(entity.z.toFixed(3)),
+      x: round3(entity.x),
+      y: round3(entity.y),
+      z: round3(entity.z),
       stage: entity.stage,
       properties: propertiesOf(entity.kind),
-      distance: Number(distance.toFixed(3)),
-      bearing: Number(wrapDegrees((Math.atan2(dx, -dz) * 180) / Math.PI - heading).toFixed(1)),
-      inReach: distance <= reach && vertical <= REACH_Y,
+      distance: round3(distance),
+      bearing: Math.round(wrapDegrees((Math.atan2(dx, -dz) * 180) / Math.PI - heading) * 10) / 10,
+      inReach: distance <= reach && vertical <= reachY,
     });
   }
   const carrying = world.carrying;
@@ -196,19 +243,18 @@ export function toObservation(
     world.blocks,
   );
   return {
-    time: Number(state.time.toFixed(3)),
-    seed: world.seed,
-    view: Number(view.toFixed(3)),
+    time: round3(state.time),
+    view: round3(view),
     beyond,
     hidden,
     self: {
-      x: Number(px.toFixed(3)),
-      y: Number(state.position.y.toFixed(3)),
-      z: Number(pz.toFixed(3)),
-      ground: Number(ground.toFixed(3)),
-      heading: Number(heading.toFixed(1)),
-      height: Number(state.height.toFixed(3)),
-      speed: Number(state.speed.toFixed(3)),
+      x: round3(px),
+      y: round3(state.position.y),
+      z: round3(pz),
+      ground: round3(ground),
+      heading: Math.round(heading * 10) / 10,
+      height: round3(state.height),
+      speed: round3(state.speed),
       cover: grassHere(px, pz, world.entities) ? 'grass' : null,
       home: insideHome(px, pz),
       carrying: carrying.map((item) => ({
@@ -220,11 +266,6 @@ export function toObservation(
       ahead: felt.ahead,
       nearby: felt.nearby,
       ways: felt.ways,
-      legsLifting: state.feet
-        .map((foot, index) =>
-          foot.y > world.terrain.height(foot.x, foot.z) + GROUND_LIFT ? index : -1,
-        )
-        .filter((index) => index >= 0),
     },
     entities: seen,
   };
