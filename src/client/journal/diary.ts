@@ -14,7 +14,16 @@ import {
   type CompactLimits,
   type Trace,
 } from './session.js';
-import { readUsage, recordUsage, type UsageSnapshot } from './usage.js';
+import {
+  readUsage,
+  recordUsage,
+  recordUsageCall,
+  recordUsageCalls,
+  type UsageCall,
+  type UsageCallMeta,
+  type UsageRange,
+  type UsageSnapshot,
+} from './usage.js';
 
 const INDEX_DAYS = 60;
 
@@ -145,7 +154,12 @@ export class Diary implements Journal {
           noted: page?.noted ?? '',
           prior: action.session.summary,
         });
-        await recordUsage(note.usage);
+        await recordUsage(note.usage, new Date(), {
+          kind: 'summary',
+          sessionId: this.date,
+          provider: 'openai-compatible',
+          modelId: settings.model,
+        });
         const folded = foldSummary(action.session, note.summary || action.session.summary);
         this.session = { ...dropOldest(folded, limits), updatedAt: Date.now() };
       } catch {
@@ -157,12 +171,24 @@ export class Diary implements Journal {
     await this.save();
   }
 
-  recordUsage(usage: LanguageModelUsage | null | undefined, now = new Date()): Promise<void> {
-    return recordUsage(usage, now);
+  recordUsage(
+    usage: LanguageModelUsage | null | undefined,
+    now = new Date(),
+    meta?: UsageCallMeta,
+  ): Promise<void> {
+    return recordUsage(usage, now, meta);
   }
 
-  readUsage(today: string): Promise<UsageSnapshot> {
-    return readUsage(today);
+  recordUsageCall(call: UsageCall): Promise<void> {
+    return recordUsageCall(call);
+  }
+
+  recordUsageCalls(calls: UsageCall[]): Promise<void> {
+    return recordUsageCalls(calls);
+  }
+
+  readUsage(today: string, range?: UsageRange): Promise<UsageSnapshot> {
+    return readUsage(today, range);
   }
 
   /** Write today's summary into the diary. Noted lines stay as they are. */
@@ -192,7 +218,12 @@ export class Diary implements Journal {
       noted: page.noted,
       prior: session.summary,
     });
-    await recordUsage(note.usage);
+    await recordUsage(note.usage, new Date(), {
+      kind: 'summary',
+      sessionId: session.date,
+      provider: 'openai-compatible',
+      modelId: settings.model,
+    });
     await this.db.put('memories', {
       ...page,
       description: note.line || page.description,

@@ -18,24 +18,67 @@ export interface UsageDay {
   total: number;
   calls: number;
   cacheRead: number;
+  cacheWrite: number;
   reasoning: number;
+  textTokens: number;
+  toolCalls: number;
+}
+
+export type UsageKind = 'agent' | 'summary';
+
+export interface UsageTool {
+  id: string;
+  name: string;
+  ok: boolean;
+  durationMs: number;
+  inputBytes: number;
+  outputBytes: number;
+}
+
+/** One model step. `id` is callId plus step number so a turn with several steps does not overwrite. */
+export interface UsageCall {
+  id: string;
+  ts: number;
+  date: string;
+  kind: UsageKind;
+  sessionId: string;
+  turnId: string;
+  step: number;
+  provider: string;
+  modelId: string;
+  total: number;
+  input: {
+    total: number;
+    noCache: number;
+    cacheRead: number;
+    cacheWrite: number;
+  };
+  output: { total: number; text: number; reasoning: number };
+  tools: UsageTool[];
+  timing: { ttftMs?: number; responseMs?: number; stepMs?: number };
+  finishReason: string;
+  /** Requests this row stands for. Absent means one; legacy day rows can stand for several. */
+  count?: number;
+  /** Tool calls in a legacy day row, which has no per-tool detail. */
+  toolCalls?: number;
 }
 
 interface SpiderDB extends DBSchema {
   sessions: { key: string; value: ChatSession };
   memories: { key: string; value: MemoryPage };
   usage: { key: string; value: UsageDay };
+  usageCalls: { key: string; value: UsageCall; indexes: { date: string } };
   snapshots: { key: string; value: WorldRecord };
 }
 
 const DB_NAME = 'spider';
-const DB_VERSION = 3;
+const DB_VERSION = 5;
 
 let opening: Promise<IDBPDatabase<SpiderDB>> | null = null;
 
 export function openSpiderDb(): Promise<IDBPDatabase<SpiderDB>> {
   opening ??= openDB<SpiderDB>(DB_NAME, DB_VERSION, {
-    upgrade(db) {
+    upgrade(db, _oldVersion, _newVersion, transaction) {
       if (!db.objectStoreNames.contains('sessions')) {
         db.createObjectStore('sessions', { keyPath: 'date' });
       }
@@ -44,6 +87,13 @@ export function openSpiderDb(): Promise<IDBPDatabase<SpiderDB>> {
       }
       if (!db.objectStoreNames.contains('usage')) {
         db.createObjectStore('usage', { keyPath: 'date' });
+      }
+      if (!db.objectStoreNames.contains('usageCalls')) {
+        const calls = db.createObjectStore('usageCalls', { keyPath: 'id' });
+        calls.createIndex('date', 'date');
+      } else {
+        const calls = transaction.objectStore('usageCalls');
+        if (!calls.indexNames.contains('date')) calls.createIndex('date', 'date');
       }
       if (!db.objectStoreNames.contains('snapshots')) {
         db.createObjectStore('snapshots', { keyPath: 'id' });
