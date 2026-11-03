@@ -319,63 +319,8 @@ function paintUsage(root: HTMLElement): void {
       }
     }
   }
-  const notice = root.querySelector<HTMLElement>('.notice');
-  if (notice) {
-    paint(notice, {
-      display: 'flex',
-      gap: '10px',
-      alignItems: 'flex-start',
-      margin: '0 0 22px',
-      padding: '11px 13px',
-      border: border.hairline,
-      color: color.ink,
-      fontSize: '13px',
-      lineHeight: '1.5',
-    });
-    const mark = notice.querySelector('b');
-    if (mark) paint(mark, { flex: '0 0 auto', fontWeight: '500' });
-  }
-  const kpis = root.querySelector<HTMLElement>('.kpis');
-  if (kpis) paint(kpis, { display: 'grid', gap: '10px', marginBottom: '22px' });
-  for (const card of root.querySelectorAll<HTMLElement>('.kpi')) {
-    paint(card, { minHeight: '108px', padding: '15px 16px 12px', border: border.hairline });
-  }
-  for (const label of root.querySelectorAll<HTMLElement>('.kpi-label, .kpi-foot')) {
-    paint(label, {
-      color: color.muted,
-      fontSize: label.classList.contains('kpi-foot') ? '11px' : '12px',
-    });
-  }
-  for (const foot of root.querySelectorAll<HTMLElement>('.kpi-foot')) {
-    paint(foot, { display: 'block', marginTop: '5px' });
-  }
-  for (const value of root.querySelectorAll<HTMLElement>('.kpi-value')) {
-    paint(value, { marginTop: '13px', fontSize: '28px', letterSpacing: '0.02em' });
-  }
-  for (const unit of root.querySelectorAll<HTMLElement>('.kpi-unit'))
-    paint(unit, { fontSize: '16px' });
   const grid = root.querySelector<HTMLElement>('.grid');
   if (grid) paint(grid, { display: 'grid', gap: '16px' });
-  for (const card of root.querySelectorAll<HTMLElement>('.card')) {
-    paint(card, { minWidth: '0', border: border.hairline, background: 'transparent' });
-  }
-  for (const section of root.querySelectorAll<HTMLElement>('.section'))
-    paint(section, { marginTop: '16px' });
-  for (const head of root.querySelectorAll<HTMLElement>('.card-head')) {
-    paint(head, {
-      display: 'flex',
-      justifyContent: 'space-between',
-      alignItems: 'baseline',
-      gap: '12px',
-      padding: '15px 17px 12px',
-      borderBottom: border.hairline,
-    });
-    const heading = head.querySelector('h2');
-    if (heading)
-      paint(heading, { margin: '0', fontSize: '16px', fontWeight: '400', letterSpacing: '0.07em' });
-    const hint = head.querySelector('small');
-    if (hint) paint(hint, { color: color.muted, fontSize: '11px' });
-  }
   const chart = root.querySelector<HTMLElement>('.chart');
   if (chart)
     paint(chart, {
@@ -498,32 +443,6 @@ function paintUsage(root: HTMLElement): void {
   for (const fill of root.querySelectorAll<HTMLElement>('.fill')) {
     paint(fill, { display: 'block', height: '100%' });
   }
-  for (const table of root.querySelectorAll<HTMLTableElement>('table')) {
-    paint(table, { width: '100%', borderCollapse: 'collapse', fontSize: '12px' });
-    const cells = [...table.querySelectorAll<HTMLElement>('td')];
-    for (const cell of table.querySelectorAll<HTMLElement>('th')) {
-      paint(cell, {
-        padding: '11px 14px',
-        borderBottom: border.ink,
-        color: color.muted,
-        fontWeight: '400',
-        textAlign: 'left',
-      });
-    }
-    const lastRow = table.rows[table.rows.length - 1];
-    const lastCount = lastRow ? lastRow.cells.length : cells.length;
-    cells.forEach((cell, index) => {
-      const last = index >= cells.length - lastCount;
-      paint(cell, {
-        padding: '12px 14px',
-        borderBottom: last ? '0' : border.hairline,
-        verticalAlign: 'middle',
-      });
-    });
-    for (const num of table.querySelectorAll<HTMLElement>('.num')) {
-      paint(num, { textAlign: 'right', fontFamily: typeface.mono, fontSize: '11px' });
-    }
-  }
   for (const name of root.querySelectorAll<HTMLElement>('.model-name')) {
     paint(name, { display: 'flex', gap: '9px', alignItems: 'center' });
   }
@@ -541,15 +460,6 @@ function paintUsage(root: HTMLElement): void {
   }
   for (const tool of root.querySelectorAll<HTMLElement>('.tool-name')) {
     paint(tool, { fontFamily: typeface.mono, fontSize: '11px' });
-  }
-  for (const pill of root.querySelectorAll<HTMLElement>('.pill')) {
-    paint(pill, {
-      display: 'inline-block',
-      padding: '2px 6px',
-      border: border.hairline,
-      color: color.muted,
-      fontSize: '10px',
-    });
   }
   const requests = root.querySelector<HTMLElement>('.requests');
   if (requests) paint(requests, { display: 'grid' });
@@ -574,13 +484,6 @@ function paintUsage(root: HTMLElement): void {
         summary.style.textDecoration = '';
       });
     }
-    const chevron = request.querySelector<HTMLElement>('.chevron');
-    if (chevron) {
-      paint(chevron, { color: color.muted, transition: 'transform 0.2s' });
-      request.addEventListener('toggle', () => {
-        chevron.style.transform = request.hasAttribute('open') ? 'rotate(90deg)' : '';
-      });
-    }
     const step = request.querySelector<HTMLElement>('.step');
     if (step) paint(step, { color: color.muted, font: font.step });
     const model = request.querySelector<HTMLElement>('.request-model');
@@ -593,28 +496,6 @@ function paintUsage(root: HTMLElement): void {
     for (const figure of request.querySelectorAll<HTMLElement>('.request-tokens, .request-time')) {
       paint(figure, { textAlign: 'right', font: font.mono });
     }
-    const detail = request.querySelector<HTMLElement>('.request-detail');
-    if (detail) {
-      paint(detail, {
-        display: 'grid',
-        gridTemplateColumns: 'repeat(3, 1fr)',
-        gap: '14px',
-        padding: '0 15px 15px 103px',
-        color: color.muted,
-        fontSize: '11px',
-      });
-      for (const heading of detail.querySelectorAll<HTMLElement>('strong')) {
-        paint(heading, {
-          display: 'block',
-          marginBottom: '4px',
-          color: color.ink,
-          fontWeight: '400',
-        });
-      }
-      const tools = detail.querySelector<HTMLElement>('.tool-list');
-      if (tools)
-        paint(tools, { gridColumn: '1/-1', display: 'flex', flexWrap: 'wrap', gap: '5px' });
-    }
   });
   const empty = root.querySelector<HTMLElement>('.usage-empty');
   if (empty)
@@ -625,11 +506,6 @@ function paintUsage(root: HTMLElement): void {
 }
 
 function layoutUsage(root: HTMLElement): void {
-  const kpis = root.querySelector<HTMLElement>('.kpis');
-  if (kpis)
-    paint(kpis, {
-      gridTemplateColumns: sheetNarrow ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))',
-    });
   const grid = root.querySelector<HTMLElement>('.grid');
   if (grid)
     paint(grid, {
@@ -652,8 +528,5 @@ function layoutUsage(root: HTMLElement): void {
   }
   for (const time of root.querySelectorAll<HTMLElement>('.request-time')) {
     time.style.display = phoneNarrow ? 'none' : '';
-  }
-  for (const detail of root.querySelectorAll<HTMLElement>('.request-detail')) {
-    detail.style.paddingLeft = phoneNarrow ? '15px' : '103px';
   }
 }
