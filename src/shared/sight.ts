@@ -67,10 +67,11 @@ export const EYE_HEIGHT = 0.85;
 export const SIGHT_TOP = 0.35;
 
 /**
- * How far above the line a ridge has to stand before it hides a target. The
- * spider is about a body high, so a low bump is not a wall.
+ * How far above the line a ridge has to stand before it hides a target. This
+ * only papers over the terrain mesh's own roughness: a real bank hides what is
+ * behind it, even when the spider could rear up over a small bump.
  */
-export const GROUND_CLEARANCE = 0.8;
+export const GROUND_CLEARANCE = 0.2;
 
 /**
  * A rise in the ground hides the far point. Samples the horizontal span and
@@ -129,14 +130,20 @@ export function sightOutline(
       points.push({ x, z });
       continue;
     }
+    // Walls do not move, so find the first one on this bearing once instead of
+    // testing every solid at every step of the march.
+    const wall = nearestWall(x, z, dx, dz, blocks, eye, outer);
     for (let s = 1; s <= steps; s++) {
       const r = Math.min(outer, s * step);
+      if (r >= wall) break;
       const px = x + dx * r;
       const pz = z + dz * r;
       const ground = height(px, pz);
-      const slope = (ground + SIGHT_TOP - eye) / r;
+      // The outline is the ground itself, not the top of something standing on
+      // it. Aiming above the ground made the area creep over the far side of a
+      // ridge that the eye cannot actually see past.
+      const slope = (ground - eye) / r;
       if (slope < horizon) break;
-      if (blocks.length > 0 && occluded(x, z, px, pz, blocks, '', eye)) break;
       horizon = Math.max(horizon, (ground - eye - GROUND_CLEARANCE) / r);
       reach = r;
       if (r >= outer) break;
@@ -155,7 +162,31 @@ export function grassHere(x: number, z: number, entities: readonly EntityState[]
   );
 }
 
+/** Distance to the first solid across the ray, or Infinity when the look is clear. */
+function nearestWall(
+  x: number,
+  z: number,
+  dx: number,
+  dz: number,
+  blocks: readonly Block[],
+  eye: number,
+  reach: number,
+): number {
+  let nearest = Number.POSITIVE_INFINITY;
+  for (const block of blocks) {
+    if (block.height < eye) continue;
+    const entry = segmentEntry(x, z, x + dx * reach, z + dz * reach, block);
+    if (entry != null) nearest = Math.min(nearest, entry * reach);
+  }
+  return nearest;
+}
+
 function segmentHits(x0: number, z0: number, x1: number, z1: number, block: Block): boolean {
+  return segmentEntry(x0, z0, x1, z1, block) !== null;
+}
+
+/** Where along the segment the slab starts, or null when the segment misses it. */
+function segmentEntry(x0: number, z0: number, x1: number, z1: number, block: Block): number | null {
   const dx = x1 - x0;
   const dz = z1 - z0;
   const p = [-dx, dx, -dz, dz];
@@ -164,14 +195,14 @@ function segmentHits(x0: number, z0: number, x1: number, z1: number, block: Bloc
   let t1 = 1;
   for (let i = 0; i < 4; i++) {
     if (Math.abs(p[i]) < 1e-9) {
-      if (q[i] < 0) return false;
+      if (q[i] < 0) return null;
       continue;
     }
     const t = q[i] / p[i];
     if (p[i] < 0) t0 = Math.max(t0, t);
     else t1 = Math.min(t1, t);
-    if (t0 > t1) return false;
+    if (t0 > t1) return null;
   }
   // A hit only at the far end is the thing itself, not something in front of it.
-  return t0 < 0.98;
+  return t0 < 0.98 ? t0 : null;
 }

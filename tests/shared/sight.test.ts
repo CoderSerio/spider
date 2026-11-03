@@ -83,6 +83,7 @@ describe('occluded', () => {
 
   it('ignores a touch only at the far end', () => {
     expect(occluded(-5, 0, -1.01, 0, [front], 'other', 1)).toBe(false);
+    expect(occluded(-5, 0, -0.99, 0, [front], 'other', 1)).toBe(false);
   });
 });
 
@@ -98,7 +99,7 @@ describe('groundOccluded', () => {
   });
 
   it('sees over a low bump that is not a ridge', () => {
-    const bump = (x: number): number => (x > 4 && x < 6 ? 1.2 : 0);
+    const bump = (x: number): number => (x > 4 && x < 6 ? 1.1 : 0);
     expect(groundOccluded(0, 0, 1, 10, 1, 0, bump)).toBe(false);
   });
 
@@ -118,8 +119,15 @@ describe('sightOutline', () => {
     const bank = (_x: number, z: number): number => (z < -4 ? 3 : 0);
     const points = sightOutline(0, 0, 0.85, 8, bank, [], 16);
     expect(points[0].z).toBeLessThan(-3.5);
-    expect(points[0].z).toBeGreaterThan(-8);
+    expect(points[0].z).toBeGreaterThan(-4.75);
     expect(points[8].z).toBeCloseTo(8);
+  });
+
+  it('does not see down the far side of a bank', () => {
+    // A long plateau: every point behind the crest is lower than the crest.
+    const bank = (_x: number, z: number): number => (z < -4 ? 3 : 0);
+    const points = sightOutline(0, 0, 0.85, 16, bank, [], 16);
+    expect(points[0].z).toBeGreaterThan(-4.75);
   });
 
   it('stops behind a wall', () => {
@@ -127,6 +135,12 @@ describe('sightOutline', () => {
     const points = sightOutline(0, 0, 0.85, 8, () => 0, [screen], 16);
     expect(points[0].z).toBeGreaterThan(-2.5);
     expect(points[8].z).toBeCloseTo(8);
+  });
+
+  it('looks over a wall shorter than the eye', () => {
+    const low = block('low', -1, 1, -4, -2, 0.5);
+    const points = sightOutline(0, 0, 0.85, 8, () => 0, [low], 16);
+    expect(points[0].z).toBeCloseTo(-8);
   });
 
   it('is a single point when the look does not reach', () => {
