@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { KINDS } from '../../../src/shared/kinds.js';
 import { MARK_LIMIT, MARK_NAME_MAX, MARK_NOTE_MAX } from '../../../src/shared/config.js';
 import { STUCK_LIMIT, type Goal } from '../../../src/shared/sim/goals.js';
+import { visualRange, worldClock } from '../../../src/shared/ecology.js';
 import { SimSession } from '../../../src/shared/sim/session.js';
 import { insideHome } from '../../../src/shared/sight.js';
 import { Terrain } from '../../../src/shared/terrain.js';
@@ -92,6 +93,16 @@ describe('SimSession basics', () => {
       0.988,
       3,
     );
+    const noon = new Date(2026, 0, 1, 12);
+    expect(session.worldInfo(noon)).toMatchObject({ lamp: false, view: 1 });
+    session.setLamp(true);
+    const midnight = new Date(2026, 0, 1, 0);
+    expect(session.worldInfo(midnight)).toMatchObject({ lamp: true });
+    expect(session.worldInfo(midnight).view).toBeCloseTo(
+      visualRange(worldClock(midnight), true),
+      3,
+    );
+    expect(session.worldInfo(midnight).view).toBeLessThan(1);
   });
 
   it('ignores negative frame steps', () => {
@@ -145,8 +156,14 @@ describe('SimSession basics', () => {
       const session = new SimSession(3);
       session.world.entities = session.world.entities.filter((entity) => entity.kind === 'nest');
       const apple = session.addEntity('apple', 0, -0.7);
-      expect(session.observe(16).view).toBeCloseTo(8.8, 5);
+      const dark = worldClock(new Date(2026, 0, 1, 23));
+      expect(session.observe(16).view).toBeCloseTo(16 * visualRange(dark), 3);
       expect(session.near().map((item) => item.id)).toEqual([apple.id]);
+      session.setLamp(true);
+      const lit = session.observe(16).view;
+      expect(lit).toBeCloseTo(16 * visualRange(dark, true), 3);
+      expect(lit).toBeLessThan(16);
+      expect(lit).toBeGreaterThan(16 * visualRange(dark));
     } finally {
       vi.useRealTimers();
     }
