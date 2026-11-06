@@ -78,6 +78,22 @@ describe('SimSession basics', () => {
     expect(snapshot.state.feet).toHaveLength(8);
   });
 
+  it('reports simulation time and client-local world time', () => {
+    const session = new SimSession(3);
+    expect(session.worldInfo(new Date(2026, 10, 5, 12, 34, 56))).toMatchObject({
+      simulationTime: 0,
+      clock: {
+        localDate: '2026-11-05',
+        localTime: '12:34:56',
+        phase: 'day',
+      },
+    });
+    expect(session.worldInfo(new Date(2026, 10, 5, 12, 34, 56)).clock.daylight).toBeCloseTo(
+      0.988,
+      3,
+    );
+  });
+
   it('ignores negative frame steps', () => {
     const session = new SimSession(3);
     session.frame(-5);
@@ -105,6 +121,7 @@ describe('SimSession basics', () => {
   });
 
   it('observes at the asked distance, clamped', () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(2026, 0, 1, 12) });
     const session = new SimSession(3);
     expect(session.observe().view).toBe(16);
     expect(session.observe(-1).view).toBe(0);
@@ -112,12 +129,27 @@ describe('SimSession basics', () => {
   });
 
   it('shortens the view inside grass, until the body is raised over it', () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(2026, 0, 1, 12) });
     const session = new SimSession(3);
     const grass = session.world.entities.find((entity) => entity.kind === 'grass')!;
     session.spider.root.position.set(grass.x, 0, grass.z);
     expect(session.observe(16).view).toBe(4.5);
     session.spider.heightSet = 1.6;
     expect(session.observe(16).view).toBe(16);
+  });
+
+  it('shortens visual range at night while leaving near sensing intact', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 0, 1, 23, 0, 0));
+    try {
+      const session = new SimSession(3);
+      session.world.entities = session.world.entities.filter((entity) => entity.kind === 'nest');
+      const apple = session.addEntity('apple', 0, -0.7);
+      expect(session.observe(16).view).toBeCloseTo(8.8, 5);
+      expect(session.near().map((item) => item.id)).toEqual([apple.id]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('stops at the round shore instead of the square map edge', async () => {
