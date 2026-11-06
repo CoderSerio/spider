@@ -85,6 +85,18 @@ export class Spider {
   #shellGround = 0;
   /** Loose bodies the legs must not pass through. Filled once per pose. */
   #spheres: LegSphere[] = [];
+  /** Last inputs that produced the current leg pose. Idle frames reuse it. */
+  #held: {
+    x: number;
+    y: number;
+    z: number;
+    yaw: number;
+    pitch: number;
+    roll: number;
+    deck: number;
+    feet: number[];
+    spheres: number[];
+  } | null = null;
   #fillLegs: (into: LegSphere[]) => void = (into) => {
     into.length = 0;
   };
@@ -151,7 +163,7 @@ export class Spider {
     if (!this.#seeded) this.#seedFeet();
 
     if (dt <= 0) {
-      this.#pose();
+      this.#pose(true);
       return;
     }
 
@@ -176,7 +188,13 @@ export class Spider {
 
     this.#stepGait(dt, throttle, turn, boost);
     this.#applySlope();
-    this.#pose();
+    // A moving body never reuses the last pose, so don't spend the frame recording one.
+    const reuse =
+      Math.abs(throttle) < 0.05 &&
+      Math.abs(turn) < 0.5 &&
+      Math.abs(this.speed) < 0.05 &&
+      Math.abs(this.yawRate) < 0.25;
+    this.#pose(reuse);
   }
 
   /** Snapshot for the wire: everything a viewer needs to rebuild the pose. */
@@ -209,7 +227,7 @@ export class Spider {
       const foot = state.feet[i];
       this.legs[i].foot.set(foot.x, foot.y, foot.z);
     }
-    this.#pose();
+    this.#pose(true);
   }
 
   /** Put a saved pose back and stop. The saved speed is not resumed. */
@@ -231,7 +249,7 @@ export class Spider {
     this.#stepping = false;
     this.#stillFor = 0;
     this.chassis.position.y = 0;
-    this.#pose();
+    this.#pose(true);
   }
 
   #buildBody(): Mesh[] {
@@ -330,7 +348,10 @@ export class Spider {
     // Buoyancy is softer than the leg lift on land, so entering water settles
     // instead of snapping onto a hard plane.
     const ease = this.#swimming ? WATER.buoyancyEase : GAIT.liftEase;
-    this.root.position.y += (support - this.root.position.y) * Math.min(1, ease * dt);
+    const follow = (support - this.root.position.y) * Math.min(1, ease * dt);
+    // Snap the last fraction so a standing body stops changing and can reuse its pose.
+    if (Math.abs(follow) < 1e-4) this.root.position.y = support;
+    else this.root.position.y += follow;
   }
 
   /** The ground, or the buoyant water line when the hollow is deep enough. */
@@ -504,10 +525,95 @@ export class Spider {
     this.#fillLegs(this.#spheres);
   }
 
-  #pose(): void {
+  #pose(reuse: boolean): void {
     this.#refreshLegs();
+    if (reuse && this.#poseHeld()) return;
     this.root.updateMatrixWorld(true);
     for (const leg of this.legs) this.#poseLeg(leg);
+    if (reuse) this.#holdPose();
+    else this.#held = null;
+  }
+
+  /** True when the body, feet, and nearby loose bodies match the pose already drawn. */
+  #poseHeld(): boolean {
+    const held = this.#held;
+    if (!held) return false;
+    if (
+      held.x !== this.root.position.x ||
+      held.y !== this.root.position.y ||
+      held.z !== this.root.position.z ||
+      held.yaw !== this.yaw ||
+      held.pitch !== this.chassis.rotation.x ||
+      held.roll !== this.chassis.rotation.z ||
+      held.deck !== this.chassis.position.y
+    ) {
+      return false;
+    }
+    const feet = held.feet;
+    for (let i = 0; i < this.legs.length; i++) {
+      const foot = this.legs[i].foot;
+      const offset = i * 3;
+      if (feet[offset] !== foot.x || feet[offset + 1] !== foot.y || feet[offset + 2] !== foot.z) {
+        return false;
+      }
+    }
+    const spheres = this.#spheres;
+    const stamp = held.spheres;
+    if (stamp.length !== spheres.length * 4) return false;
+    for (let i = 0; i < spheres.length; i++) {
+      const sphere = spheres[i];
+      const offset = i * 4;
+      if (
+        stamp[offset] !== sphere.x ||
+        stamp[offset + 1] !== sphere.y ||
+        stamp[offset + 2] !== sphere.z ||
+        stamp[offset + 3] !== sphere.radius
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  #holdPose(): void {
+    const held = (this.#held ??= {
+      x: 0,
+      y: 0,
+      z: 0,
+      yaw: 0,
+      pitch: 0,
+      roll: 0,
+      deck: 0,
+      feet: [],
+      spheres: [],
+    });
+    held.x = this.root.position.x;
+    held.y = this.root.position.y;
+    held.z = this.root.position.z;
+    held.yaw = this.yaw;
+    held.pitch = this.chassis.rotation.x;
+    held.roll = this.chassis.rotation.z;
+    held.deck = this.chassis.position.y;
+    const feet = held.feet;
+    feet.length = this.legs.length * 3;
+    for (let i = 0; i < this.legs.length; i++) {
+      const foot = this.legs[i].foot;
+      const offset = i * 3;
+      feet[offset] = foot.x;
+      feet[offset + 1] = foot.y;
+      feet[offset + 2] = foot.z;
+    }
+    const stamp = held.spheres;
+    const spheres = this.#spheres;
+    stamp.length = spheres.length * 4;
+    for (let i = 0; i < spheres.length; i++) {
+      const sphere = spheres[i];
+      const offset = i * 4;
+      stamp[offset] = sphere.x;
+      stamp[offset + 1] = sphere.y;
+      stamp[offset + 2] = sphere.z;
+      stamp[offset + 3] = sphere.radius;
+    }
   }
 
   #poseLeg(leg: Leg): void {

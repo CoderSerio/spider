@@ -11,6 +11,7 @@ import { Terrain, TERRAIN } from '../../../src/shared/terrain.js';
 import { floatHeight, WATER, waterAt } from '../../../src/shared/water.js';
 
 const IDLE = { throttle: 0, turn: 0, lift: 0, boost: 0 };
+const FLAT = (): number => 0;
 
 function mountWorld(spider: Spider, index: number): Vector3 {
   spider.root.updateMatrixWorld(true);
@@ -20,6 +21,29 @@ function mountWorld(spider: Spider, index: number): Vector3 {
 function specDir(spider: Spider, index: number): Vector3 {
   const spec = spider.legs[index].spec;
   return new Vector3(spec.x, 0, spec.z).normalize();
+}
+
+function worstClawGap(spider: Spider, ground: (x: number, z: number) => number): number {
+  const point = new Vector3();
+  let worst = Number.NEGATIVE_INFINITY;
+  for (const leg of spider.legs) {
+    let lowest = Number.POSITIVE_INFINITY;
+    leg.claw.updateWorldMatrix(true, true);
+    leg.claw.traverse((node) => {
+      const geometry = (
+        node as { geometry?: { getAttribute(name: string): MatrixAttr | undefined } }
+      ).geometry;
+      const position = geometry?.getAttribute('position');
+      if (!position) return;
+      const world = (node as { matrixWorld: Matrix4 }).matrixWorld;
+      for (let i = 0; i < position.count; i++) {
+        point.set(position.getX(i), position.getY(i), position.getZ(i)).applyMatrix4(world);
+        lowest = Math.min(lowest, point.y - ground(point.x, point.z));
+      }
+    });
+    worst = Math.max(worst, lowest);
+  }
+  return worst;
 }
 
 function shellClearance(spider: Spider, ground: (x: number, z: number) => number): number {
@@ -364,6 +388,16 @@ describe('Spider', () => {
     expect(Number.isFinite(leg.foot.x)).toBe(true);
   });
 
+  it('keeps the claws on the ground when the body stands up', () => {
+    const spider = new Spider();
+    spider.bindGround(FLAT);
+    spider.update(0.5);
+    const resting = worstClawGap(spider, FLAT);
+    for (let i = 0; i < 40; i++) spider.update(0.1, { ...IDLE, lift: 1 });
+    expect(spider.heightSet).toBeCloseTo(GAIT.heightMax);
+    expect(worstClawGap(spider, FLAT)).toBeLessThan(resting + 0.02);
+  });
+
   it('does not stretch a bone when the body stands up', () => {
     const spider = new Spider();
     spider.bindGround(() => 0);
@@ -453,6 +487,47 @@ describe('Spider', () => {
     spider.update(1 / 30);
     expect(spider.legs[0].foot.y).toBeGreaterThan(CONTACT);
     expect(spider.legs[0].foot.y).toBeLessThan(0.08);
+  });
+
+  it('re-solves a planted leg when a loose body moves', () => {
+    const spider = new Spider();
+    spider.bindGround(FLAT);
+    const sphere = { x: 40, y: 1, z: 40, radius: 0.2 };
+    let count = 1;
+    spider.bindLegs(
+      (into) => {
+        into.length = count;
+        if (count > 0) into[0] = sphere;
+      },
+      () => Number.NEGATIVE_INFINITY,
+    );
+    for (let i = 0; i < 90; i++) spider.update(1 / 60, IDLE);
+    const foot = spider.legs[0].foot.clone();
+    // Each component has to differ on its own. A change to x hides y, z, and radius.
+    sphere.x += 1;
+    spider.update(0);
+    sphere.y += 1;
+    spider.update(0);
+    sphere.z += 1;
+    spider.update(0);
+    sphere.radius += 0.1;
+    spider.update(0);
+    expect(spider.legs[0].foot.distanceTo(foot)).toBeLessThan(1e-6);
+
+    const leg = spider.legs[0];
+    const shin = leg.joints[2].position;
+    const ankle = leg.joints[3].position;
+    sphere.x = (shin.x + ankle.x) / 2;
+    sphere.y = (shin.y + ankle.y) / 2;
+    sphere.z = (shin.z + ankle.z) / 2;
+    sphere.radius = 0.45;
+    const knee = shin.clone();
+    spider.update(0);
+    expect(leg.joints[2].position.distanceTo(knee)).toBeGreaterThan(1e-3);
+    const shoved = leg.joints[2].position.clone();
+    count = 0;
+    spider.update(0);
+    expect(leg.joints[2].position.distanceTo(shoved)).toBeGreaterThan(1e-3);
   });
 
   it('twists a bone toward the body when it points along the body side', () => {
