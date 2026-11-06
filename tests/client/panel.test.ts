@@ -1849,3 +1849,24 @@ describe('cloud panel', () => {
     expect(loop.runAgent).not.toHaveBeenCalled();
   });
 });
+
+it('switches between local inference and the saved API configuration', () => {
+  writePilot({ baseURL: 'https://example.com', model: 'cloud-model', apiKey: 'secret' });
+  mount();
+  clickButton('#settings-open');
+  field('localModel').checked = true;
+  field('localModel').dispatchEvent(new Event('change', { bubbles: true }));
+  expect(readPilot().mode).toBe('local');
+  expect(document.querySelector<HTMLElement>('#online-model-panel')!.hidden).toBe(true);
+  expect(document.querySelector('#pilot-model')!.textContent).toContain('本机');
+  expect(field('apiKey').disabled).toBe(true);
+  clickButton('#settings-close');
+  clickButton('#settings-open');
+  expect(field('localModel').checked).toBe(true);
+  field('localModel').checked = false;
+  field('localModel').dispatchEvent(new Event('change', { bubbles: true }));
+  expect(readPilot().mode).toBeUndefined();
+  expect(field('apiKey').value).toBe('secret');
+  expect(field('apiKey').disabled).toBe(false);
+  expect(document.querySelector<HTMLElement>('#online-model-panel')!.hidden).toBe(false);
+});

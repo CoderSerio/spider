@@ -1,5 +1,6 @@
+import { LOCAL_MODEL } from '../local/types.js';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { isLoopFinished, streamText, type LanguageModelUsage } from 'ai';
+import { isLoopFinished, isStepCount, streamText, type LanguageModelUsage } from 'ai';
 import { CARRY_LIMIT, MARK_LIMIT } from '../../shared/config.js';
 import type { SimSession } from '../../shared/sim/session.js';
 import type { MemoryApi } from '../journal/diary.js';
@@ -73,9 +74,11 @@ export async function runAgent({
   signal,
   onEvent,
 }: RunAgentOptions): Promise<AgentReply> {
+  const local = settings.mode === 'local';
   const provider = createOpenAICompatible({
     name: 'openai-compatible',
-    baseURL: settings.baseURL,
+    baseURL: local ? 'http://local.invalid/v1' : settings.baseURL,
+    ...(local ? { fetch: (await import('../local/fetch.js')).localFetch } : {}),
     apiKey: settings.apiKey,
     includeUsage: true,
   });
@@ -86,11 +89,19 @@ export async function runAgent({
   const turnId = uniqueId();
   const calls: UsageCall[] = [];
   const pendingTools = new Map<string, UsageTool>();
-  const tools = spiderTools(session, memory);
+  const allTools = spiderTools(session, memory);
+  const tools = local
+    ? {
+        observe: allTools.observe,
+        walk: allTools.walk,
+        turn: allTools.turn,
+        set_height: allTools.set_height,
+      }
+    : allTools;
   const result = streamText({
     // A model that writes its calls as text still gets them executed, and the
     // tool loop continues as if it had used the tool-call channel.
-    model: withInlineCalls(provider(settings.model), Object.keys(tools)),
+    model: withInlineCalls(provider(local ? LOCAL_MODEL : settings.model), Object.keys(tools)),
     system: systemFor(
       today,
       chat?.summary ?? '',
@@ -98,11 +109,18 @@ export async function runAgent({
       memory != null,
     ),
     messages: toMessages(
-      chat ?? { date: today, summary: '', turns: [], updatedAt: 0, digestedAt: 0 },
+      (local ? undefined : chat) ?? {
+        date: today,
+        summary: '',
+        turns: [],
+        updatedAt: 0,
+        digestedAt: 0,
+      },
       goal,
     ),
     tools,
-    stopWhen: isLoopFinished(),
+    stopWhen: local ? [isLoopFinished(), isStepCount(6)] : isLoopFinished(),
+    ...(local ? { maxRetries: 0 } : {}),
     reasoning: reasoningOf(settings),
     abortSignal: signal,
     // One body. A second call started early would cancel the goal still running.

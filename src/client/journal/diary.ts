@@ -1,5 +1,5 @@
 import type { LanguageModelUsage } from 'ai';
-import { contextTokensOf, pilotReady, type PilotSettings } from '../settings.js';
+import { contextTokensOf, modelIdOf, pilotReady, type PilotSettings } from '../settings.js';
 import type { Journal } from './api.js';
 import { blankMemory, openSpiderDb, type MemoryPage } from './db.js';
 import { localDate, shiftDate } from '../../shared/dates.js';
@@ -55,7 +55,7 @@ export interface MemoryApi {
 }
 
 function limitsOf(settings: PilotSettings): CompactLimits {
-  return { contextTokens: contextTokensOf(settings.contextTokens) };
+  return { contextTokens: contextTokensOf(settings.mode === 'local' ? 2 : settings.contextTokens) };
 }
 
 function viewOf(page: MemoryPage): MemoryView {
@@ -162,7 +162,7 @@ export class Diary implements Journal {
           kind: 'summary',
           sessionId: this.date,
           provider: 'openai-compatible',
-          modelId: settings.model,
+          modelId: modelIdOf(settings),
         });
         const folded = foldSummary(action.session, note.summary || action.session.summary);
         this.session = { ...dropOldest(folded, limits), updatedAt: Date.now() };
@@ -226,7 +226,7 @@ export class Diary implements Journal {
       kind: 'summary',
       sessionId: session.date,
       provider: 'openai-compatible',
-      modelId: settings.model,
+      modelId: modelIdOf(settings),
     });
     await this.db.put('memories', {
       ...page,

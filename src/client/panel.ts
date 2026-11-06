@@ -1,3 +1,4 @@
+import { bindLocalPanel } from './local/panel.js';
 import { closeDialog, showDialog } from '../ui/dialog/index.js';
 import { placeTail } from '../ui/dress.js';
 import type { MenuSelect } from '../ui/select/index.js';
@@ -134,7 +135,7 @@ export function mountPanel(
   const paint = (): void => {
     const settings = readPilot();
     const ready = pilotReady(settings);
-    model.textContent = ready ? settings.model : '';
+    model.textContent = ready ? (settings.mode === 'local' ? 'Qwen3 · 本机' : settings.model) : '';
     model.style.display = ready ? '' : 'none';
     goal.placeholder = ready ? '让它去做一件事' : '未填写模型';
   };
@@ -183,6 +184,8 @@ export function mountPanel(
     stage.voice();
   };
 
+  const localPanel = bindLocalPanel(doc);
+
   const field = (name: string): HTMLInputElement => {
     const element = settingsForm.elements.namedItem(name);
     if (!(element instanceof HTMLInputElement)) throw new Error(`Missing settings field ${name}`);
@@ -195,16 +198,21 @@ export function mountPanel(
     apiKey: string;
     contextTokens: string;
     thinking: boolean;
+    localModel: boolean;
   } => ({
     baseURL: field('baseURL').value,
     model: field('model').value,
     apiKey: field('apiKey').value,
     contextTokens: field('contextTokens').value,
     thinking: field('thinking').checked,
+    localModel: field('localModel').checked,
   });
   let shownFields: ReturnType<typeof modelFields> | null = null;
 
   const fill = (settings: PilotSettings): void => {
+    field('localModel').checked = settings.mode === 'local';
+    reflectSwitch(field('localModel'));
+    localPanel(settings.mode === 'local');
     field('baseURL').value = settings.baseURL;
     field('model').value = settings.model;
     field('apiKey').value = settings.apiKey;
@@ -265,6 +273,11 @@ export function mountPanel(
     }
     if (values.contextTokens !== shownFields.contextTokens) {
       next.contextTokens = numberOrNull(values.contextTokens);
+      changed = true;
+    }
+    if (values.localModel !== shownFields.localModel) {
+      next.mode = values.localModel ? 'local' : 'api';
+      localPanel(values.localModel);
       changed = true;
     }
     if (values.thinking !== shownFields.thinking) {

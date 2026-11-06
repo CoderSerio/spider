@@ -1,3 +1,4 @@
+import type { LocalMessage, LocalReply, LocalStatus } from '../local/types.js';
 import type { LanguageModelUsage } from 'ai';
 import type { WorldRecord } from '../../shared/sim/snapshot.js';
 import type { PilotSettings } from '../settings.js';
@@ -15,6 +16,9 @@ export interface JournalState {
 }
 
 export type JournalRequest =
+  | { id: number; method: 'localLoad' | 'localStatus' | 'localUnload' }
+  | { id: number; method: 'localComplete'; args: [string, LocalMessage[]] }
+  | { id: number; method: 'localCancel'; args: [string] }
   | { id: number; method: 'open' }
   | { id: number; method: 'save' }
   | { id: number; method: 'record'; args: [string, string, Trace[], PilotSettings] }
@@ -43,6 +47,11 @@ export type JournalReply =
   | { id: number; ok: false; error: string };
 
 export interface JournalResultMap {
+  localLoad: void;
+  localStatus: LocalStatus;
+  localUnload: void;
+  localComplete: LocalReply;
+  localCancel: void;
   open: JournalState;
   save: JournalState;
   record: JournalState;
