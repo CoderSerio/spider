@@ -1,6 +1,6 @@
 import { Quaternion, Vector3 } from 'three';
 import { groundSupport } from '../contact.js';
-import { PHYSICS } from '../config.js';
+import { CONTACT, PHYSICS } from '../config.js';
 import { kindOf } from '../kinds.js';
 import { BODY_RADIUS, blockedAt } from '../sight.js';
 import { insideLand } from '../terrain.js';
@@ -135,10 +135,6 @@ export function stepPhysics(world: WorldState, body: Body, dt: number): void {
     const fraction = submergedFraction(entity.y, water.surface, radius);
     // How much of the body's weight the water carries: >1 means it is pushed up.
     const buoyancy = (fraction * WATER.density * volume) / mass;
-    const floor = floorAt(world, entity.x, entity.z, radius);
-    mover.floor = floor;
-    const grounded = entity.y <= floor + 1e-4;
-    const floating = fraction > 0 && !grounded;
     const gx =
       (world.terrain.height(entity.x + EPS, entity.z) -
         world.terrain.height(entity.x - EPS, entity.z)) /
@@ -147,6 +143,14 @@ export function stepPhysics(world: WorldState, body: Body, dt: number): void {
       (world.terrain.height(entity.x, entity.z + EPS) -
         world.terrain.height(entity.x, entity.z - EPS)) /
       (2 * EPS);
+    // groundSupport uses these same four slope samples. Reuse them here;
+    // moving apples still use floorAt if their position changes later.
+    const ground = world.terrain.height(entity.x, entity.z);
+    const floor =
+      radius <= 0 ? ground : ground + radius * (Math.sqrt(1 + gx * gx + gz * gz) - 1) + CONTACT;
+    mover.floor = floor;
+    const grounded = entity.y <= floor + 1e-4;
+    const floating = fraction > 0 && !grounded;
     const slope = Math.hypot(gx, gz);
     mover.slope = floating ? 0 : slope;
     // A body held by the water no longer follows the slope. A body still on the
@@ -387,9 +391,12 @@ function contactNormal(
   const dx = b.entity.x - a.entity.x;
   const dy = b.entity.y + b.radius - (a.entity.y + a.radius);
   const dz = b.entity.z - a.entity.z;
-  const dist = Math.hypot(dx, dy, dz);
   const min = a.radius + b.radius;
-  if (dist >= min + slop) return null;
+  const reach = min + slop;
+  if (Math.abs(dx) >= reach || Math.abs(dy) >= reach || Math.abs(dz) >= reach) return null;
+  const squared = dx * dx + dy * dy + dz * dz;
+  if (squared >= reach * reach) return null;
+  const dist = Math.sqrt(squared);
   if (dist < 1e-8) return { nx: 1, ny: 0, nz: 0, depth: min - dist };
   return { nx: dx / dist, ny: dy / dist, nz: dz / dist, depth: min - dist };
 }
