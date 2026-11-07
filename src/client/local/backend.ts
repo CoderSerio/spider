@@ -5,6 +5,7 @@ export function useLocalBackend(value: LocalBackend): void {
   backend = value;
 }
 export async function localBackend(): Promise<LocalBackend> {
-  // In the journal worker (or the existing no-Worker fallback), call directly.
-  return backend ?? (await import('./runtime.js')).localRuntime;
+  if (!backend)
+    throw new Error('本机模型需要后台线程，请等待页面初始化完成；若仍不可用，请使用在线模型');
+  return backend;
 }

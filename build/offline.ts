@@ -27,13 +27,19 @@ export function offlinePlugin(): Plugin {
 
 export function offlineWorkerSource(paths: string[], version: string): string {
   return `
-const NAME = 'spider-offline-${version}';
+const PREFIX = 'spider-offline-' + encodeURIComponent(self.registration.scope) + ':';
+const NAME = PREFIX + '${version}';
 const URLS = ${JSON.stringify(paths)}.map(path => new URL(path, self.registration.scope).href);
+const CORE = URLS.filter(url => /\\.(html|js|css|woff2?)$/.test(url) || url.startsWith(new URL('assets/', self.registration.scope).href));
+const OPTIONAL = URLS.filter(url => !CORE.includes(url));
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(NAME).then(cache => cache.addAll(URLS)));
+  event.waitUntil(caches.open(NAME).then(async cache => {
+    await cache.addAll(CORE);
+    await Promise.allSettled(OPTIONAL.map(url => cache.add(url)));
+  }));
 });
 self.addEventListener('activate', event => {
-  event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('spider-offline-') && key !== NAME).map(key => caches.delete(key)))));
+  event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith(PREFIX) && key !== NAME).map(key => caches.delete(key)))));
 });
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;

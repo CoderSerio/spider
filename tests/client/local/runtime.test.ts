@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 const mock = vi.hoisted(() => ({
   reload: vi.fn(),
+  construct: vi.fn(),
   unload: vi.fn(),
   create: vi.fn(),
   interrupt: vi.fn(),
@@ -8,6 +9,7 @@ const mock = vi.hoisted(() => ({
 vi.mock('@mlc-ai/web-llm', () => ({
   MLCEngine: class {
     constructor(options: { initProgressCallback: (report: { text: string }) => void }) {
+      mock.construct(options);
       options.initProgressCallback({ text: 'download 50%' });
     }
     reload = mock.reload;
@@ -23,6 +25,7 @@ const reply = {
 };
 beforeEach(() => {
   vi.resetAllMocks();
+  mock.unload.mockResolvedValue(undefined);
   mock.create.mockResolvedValue(reply);
 });
 it('loads once, shares the model, strips reasoning and releases GPU memory without deleting caches', async () => {
@@ -101,4 +104,61 @@ it('interrupts the active request and rejects its partial answer', async () => {
   finish(reply);
   await rejected;
   expect((await runtime.localComplete('next', [])).text).toBe('done');
+});
+
+it('preserves the load error even if cleanup fails and permits retry', async () => {
+  const runtime = createLocalRuntime();
+  const original = new Error('download failed');
+  mock.reload.mockRejectedValueOnce(original);
+  mock.unload.mockRejectedValueOnce(new Error('cleanup failed'));
+  await expect(runtime.localLoad()).rejects.toBe(original);
+  expect(await runtime.localStatus()).toEqual({
+    ready: false,
+    text: '加载失败：Error: download failed',
+  });
+  await runtime.localLoad();
+  expect((await runtime.localStatus()).ready).toBe(true);
+});
+it('updates failure state when constructing the engine fails', async () => {
+  const runtime = createLocalRuntime();
+  mock.construct.mockImplementationOnce(() => {
+    throw new Error('cannot initialize');
+  });
+  await expect(runtime.localLoad()).rejects.toThrow('cannot initialize');
+  expect((await runtime.localStatus()).text).toContain('加载失败');
+  expect(mock.unload).not.toHaveBeenCalled();
+  await runtime.localLoad();
+  expect((await runtime.localStatus()).ready).toBe(true);
+});
+it('uses actual context errors and rejects truncated output before any tool can execute', async () => {
+  const runtime = createLocalRuntime();
+  await runtime.localLoad();
+  const overflow = new Error('too many prompt tokens');
+  overflow.name = 'ContextWindowSizeExceededError';
+  mock.create.mockRejectedValueOnce(overflow);
+  await expect(
+    runtime.localComplete('chinese', [{ role: 'user', content: '你好'.repeat(3000) }]),
+  ).rejects.toMatchObject({
+    message: '本机模型的上下文已满，请发送一条较短的新指令',
+    cause: overflow,
+  });
+  mock.create.mockResolvedValueOnce({
+    ...reply,
+    choices: [{ message: { content: '{"name":"go"}' }, finish_reason: 'length' }],
+  });
+  await expect(runtime.localComplete('cutoff', [])).rejects.toThrow('回复达到长度限制');
+  mock.create.mockRejectedValueOnce('device lost');
+  await expect(runtime.localComplete('other', [])).rejects.toBe('device lost');
+  expect((await runtime.localComplete('retry', [])).text).toBe('done');
+});
+it('loads immutable model and wasm URLs with the matching model id', async () => {
+  const runtime = createLocalRuntime();
+  await runtime.localLoad();
+  const config = mock.construct.mock.calls[0][0].appConfig;
+  expect(config.model_list).toHaveLength(1);
+  expect(config.model_list[0].model).toMatch(/\/resolve\/[a-f0-9]{40}\/$/);
+  expect(config.model_list[0].model_lib).toMatch(/\/[a-f0-9]{40}\/web-llm-models\/v0_2_87\/base\//);
+  expect(mock.reload).toHaveBeenCalledWith(config.model_list[0].model_id, {
+    context_window_size: 4096,
+  });
 });

@@ -39,9 +39,6 @@ export function localMessages(body: RequestBody): LocalMessage[] {
   // Keep the current instruction and its tool results together. Earlier turns
   // remain in the diary; the small model does not use a whole day's transcript.
   const history = messages.filter((m) => m.role !== 'system');
-  if (instruction.length + JSON.stringify(history).length > 10000) {
-    throw new Error('本机模型的上下文已满，请发送一条较短的新指令');
-  }
   return [{ role: 'system', content: instruction }, ...history];
 }
 

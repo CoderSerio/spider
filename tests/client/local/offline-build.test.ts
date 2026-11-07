@@ -5,12 +5,26 @@ import { offlinePlugin, offlineWorkerSource } from '../../../build/offline.js';
 
 it('pre-caches built assets and serves only the application while offline', async () => {
   // Exercise the emitted service-worker source, including nested deployment scope.
-  const source = offlineWorkerSource(['index.html', 'assets/journal.worker.js'], 'test');
+  const source = offlineWorkerSource(['index.html', 'assets/journal.worker.js', 'og.png'], 'test');
   const handlers: Record<string, (event: any) => void> = {};
-  const cache = { addAll: vi.fn(async () => {}), match: vi.fn(async () => 'cached') };
+  const prefix = 'spider-offline-' + encodeURIComponent('https://example.com/spider/') + ':';
+  const otherPrefix = 'spider-offline-' + encodeURIComponent('https://example.com/other/') + ':';
+  const cache = {
+    add: vi.fn(async () => {
+      throw new Error('optional missing');
+    }),
+    addAll: vi.fn(async () => {}),
+    match: vi.fn(async () => 'cached'),
+  };
   const caches = {
     open: vi.fn(async () => cache),
-    keys: vi.fn(async () => ['spider-offline-old', 'webllm/model']),
+    keys: vi.fn(async () => [
+      prefix + 'old',
+      prefix + 'test',
+      otherPrefix + 'old',
+      'spider-offline-legacy',
+      'webllm/model',
+    ]),
     delete: vi.fn(async () => true),
   };
   const fetch = vi.fn(async () => 'network');
@@ -35,9 +49,14 @@ it('pre-caches built assets and serves only the application while offline', asyn
   expect(cache.addAll.mock.calls[0][0].some((url: string) => url.includes('journal.worker'))).toBe(
     true,
   );
+  expect(cache.add).toHaveBeenCalledWith('https://example.com/spider/og.png');
+  expect(cache.addAll.mock.calls[0][0]).not.toContain('https://example.com/spider/og.png');
+  cache.addAll.mockRejectedValueOnce(new Error('core missing'));
+  handlers.install({ waitUntil });
+  await expect(work).rejects.toThrow('core missing');
   handlers.activate({ waitUntil });
   await work;
-  expect(caches.delete.mock.calls).toEqual([['spider-offline-old']]);
+  expect(caches.delete.mock.calls).toEqual([[prefix + 'old']]);
   const respondWith = vi.fn();
   handlers.fetch({
     request: { method: 'GET', url: 'https://example.com/spider/', mode: 'navigate' },

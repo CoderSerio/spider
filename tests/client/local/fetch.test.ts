@@ -45,9 +45,10 @@ it('turns tool results into chat messages and supplies executable tool schemas',
   expect(messages[2].content).toContain('"name":"go"');
   expect(messages[3]).toEqual({ role: 'user', content: '工具执行结果：{"ok":true}' });
   expect(messages[4].content).toBe('');
-  expect(() => localMessages({ messages: [{ role: 'user', content: 'x'.repeat(10001) }] })).toThrow(
-    '上下文已满',
-  );
+  // Long inputs must be judged by the engine's tokenizer, not a character cutoff.
+  expect(
+    localMessages({ messages: [{ role: 'user', content: 'x'.repeat(10001) }] })[1].content,
+  ).toHaveLength(10001);
   expect(
     localMessages({ tools: [], messages: [{ role: 'system', content: 'summarize' }] })[0].content,
   ).toBe('summarize');
@@ -82,10 +83,8 @@ it('cancels the matching generation and never returns an aborted result', async 
   ).rejects.toMatchObject({ name: 'AbortError' });
   expect(backend.localComplete).toHaveBeenCalledTimes(1);
 });
-it('uses a direct runtime when no journal worker exists', async () => {
+it('reports unavailable workers without importing a main-thread engine', async () => {
   vi.resetModules();
   const bridge = await import('../../../src/client/local/backend.js');
-  expect(await bridge.localBackend()).toBe(
-    (await import('../../../src/client/local/runtime.js')).localRuntime,
-  );
+  await expect(bridge.localBackend()).rejects.toThrow('需要后台线程');
 });

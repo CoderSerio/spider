@@ -19,6 +19,7 @@ const button = (id: string) => document.querySelector<HTMLButtonElement>(id)!;
 const status = () => document.querySelector('#local-status')!.textContent;
 beforeEach(() => {
   vi.resetAllMocks();
+  mock.offline.mockResolvedValue(undefined);
   vi.stubGlobal('navigator', { gpu: {} });
   document.body.replaceChildren(buildChrome(document));
   mock.status.mockResolvedValue({ text: 'ready', ready: true });
@@ -80,3 +81,38 @@ it('explains missing WebGPU before downloading anything', async () => {
   expect(mock.load).not.toHaveBeenCalled();
   expect(mock.offline).not.toHaveBeenCalled();
 });
+
+it('loads the model even when page caching fails, without claiming offline readiness', async () => {
+  mock.offline.mockRejectedValueOnce(new Error('storage unavailable'));
+  bindLocalPanel(document)(true);
+  button('#local-load').click();
+  await vi.waitFor(() => expect(status()).toBe('ready'));
+  expect(mock.load).toHaveBeenCalledOnce();
+  expect(document.querySelector('#offline-status')!.textContent).toContain('暂不支持断网重开');
+});
+
+it.each(['resolve', 'reject'] as const)(
+  'does not wait on caching or let a stale %s overwrite a newer attempt',
+  async (outcome) => {
+    let resolve!: () => void;
+    let reject!: (error: Error) => void;
+    mock.offline.mockImplementationOnce(
+      () =>
+        new Promise<void>((yes, no) => {
+          resolve = yes;
+          reject = no;
+        }),
+    );
+    bindLocalPanel(document)(true);
+    button('#local-load').click();
+    await vi.waitFor(() => expect(status()).toBe('ready'));
+    expect(document.querySelector('#offline-status')!.textContent).toContain('正在准备');
+    button('#local-load').click();
+    await vi.waitFor(() => expect(mock.load).toHaveBeenCalledTimes(2));
+    const latest = document.querySelector('#offline-status')!.textContent;
+    if (outcome === 'resolve') resolve();
+    else reject(new Error('old attempt'));
+    await Promise.resolve();
+    expect(document.querySelector('#offline-status')!.textContent).toBe(latest);
+  },
+);

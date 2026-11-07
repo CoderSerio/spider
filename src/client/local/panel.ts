@@ -10,7 +10,9 @@ export function bindLocalPanel(doc: Document): (local: boolean) => void {
   const report = async (): Promise<void> => {
     status.textContent = (await (await localBackend()).localStatus()).text;
   };
+  let loadAttempt = 0;
   load.addEventListener('click', () => {
+    const attempt = ++loadAttempt;
     load.disabled = true;
     unload.disabled = true;
     status.textContent = '正在加载；优先使用缓存，缺失文件才会下载…';
@@ -20,10 +22,19 @@ export function bindLocalPanel(doc: Document): (local: boolean) => void {
     void (async () => {
       if (!('gpu' in navigator))
         throw new Error('需要支持 WebGPU 的浏览器，请使用新版桌面 Chrome 或 Edge');
-      await prepareOffline();
-      offline.textContent = import.meta.env.DEV
-        ? '开发模式：网页离线缓存仅在正式构建中启用'
-        : '网页已缓存。模型加载成功后可断网重开；浏览器清理缓存后需要重新下载。';
+      offline.textContent = '正在准备网页离线缓存…';
+      void prepareOffline().then(
+        () => {
+          if (attempt !== loadAttempt) return;
+          offline.textContent = import.meta.env.DEV
+            ? '开发模式：网页离线缓存仅在正式构建中启用'
+            : '网页已缓存。模型加载成功后可断网重开；浏览器清理缓存后需要重新下载。';
+        },
+        () => {
+          if (attempt !== loadAttempt) return;
+          offline.textContent = '网页离线缓存不可用，本机模型仍可加载；暂不支持断网重开页面。';
+        },
+      );
       await (await localBackend()).localLoad();
       await report();
     })()

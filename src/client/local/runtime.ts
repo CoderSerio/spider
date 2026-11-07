@@ -1,4 +1,5 @@
 import type { MLCEngine } from '@mlc-ai/web-llm';
+import { LOCAL_APP_CONFIG } from './model.js';
 import { LOCAL_MODEL, type LocalBackend, type LocalStatus } from './types.js';
 
 /** One engine in the journal worker, shared by actions and diary summaries. */
@@ -23,18 +24,20 @@ export function createLocalRuntime(): LocalBackend {
       serial(async () => {
         if (engine) return;
         status = { ready: false, text: '正在加载本机模型…' };
-        const { MLCEngine } = await import('@mlc-ai/web-llm');
-        const next = new MLCEngine({
-          initProgressCallback: (report) => {
-            status = { ready: false, text: report.text };
-          },
-        });
+        let next: MLCEngine | null = null;
         try {
+          const { MLCEngine } = await import('@mlc-ai/web-llm');
+          next = new MLCEngine({
+            appConfig: LOCAL_APP_CONFIG,
+            initProgressCallback: (report) => {
+              status = { ready: false, text: report.text };
+            },
+          });
           await next.reload(LOCAL_MODEL, { context_window_size: 4096 });
           engine = next;
           status = { ready: true, text: '本机模型已就绪' };
         } catch (error) {
-          await next.unload();
+          await next?.unload().catch(() => undefined);
           status = { ready: false, text: `加载失败：${String(error)}` };
           throw error;
         }
@@ -53,6 +56,9 @@ export function createLocalRuntime(): LocalBackend {
             extra_body: { enable_thinking: false },
           });
           if (cancelled.has(id)) throw new DOMException('已停止', 'AbortError');
+          if (result.choices[0].finish_reason === 'length') {
+            throw new Error('本机模型的回复达到长度限制，请缩短指令后重试');
+          }
           return {
             text: (result.choices[0].message.content ?? '')
               .replace(/<think>[\s\S]*?<\/think>/g, '')
@@ -60,6 +66,11 @@ export function createLocalRuntime(): LocalBackend {
             input: result.usage!.prompt_tokens,
             output: result.usage!.completion_tokens,
           };
+        } catch (error) {
+          if (error instanceof Error && error.name === 'ContextWindowSizeExceededError') {
+            throw new Error('本机模型的上下文已满，请发送一条较短的新指令', { cause: error });
+          }
+          throw error;
         } finally {
           active = null;
           pending.delete(id);
