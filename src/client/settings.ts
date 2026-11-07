@@ -1,7 +1,6 @@
-/** Model credentials live in this browser only. Empty means hand driving. */
-
 import { LOCAL_MODEL } from './local/types.js';
 import { openSpiderDb, type PreferenceRecord } from './journal/db.js';
+import { providerById, providerNeedsKey } from './providers.js';
 import { PersistentCache } from './store/cache.js';
 
 const STORAGE_KEY = 'spider.pilot';
@@ -9,19 +8,18 @@ const OPEN_MS = 1500;
 
 export interface PilotSettings {
   mode?: 'api' | 'local';
+  provider: string;
   baseURL: string;
   model: string;
   apiKey: string;
-  /** Model context window in k token (×1000). Null leaves the length unset. */
   contextTokens: number | null;
-  /** When on, a long idle stretch may write the day's conversation into the diary. */
   autoMemory: boolean;
-  /** When off, the request asks the model not to reason before answering. */
   thinking: boolean;
 }
 
 export type PilotInput = {
   mode?: 'api' | 'local';
+  provider?: string;
   baseURL: string;
   model: string;
   apiKey: string;
@@ -31,6 +29,7 @@ export type PilotInput = {
 };
 
 const EMPTY: PilotSettings = {
+  provider: 'custom',
   baseURL: '',
   model: '',
   apiKey: '',
@@ -82,6 +81,7 @@ function parsePilot(raw: unknown): PilotSettings | null {
   const parsed = raw as Partial<PilotSettings>;
   return {
     ...(parsed.mode === 'local' ? { mode: 'local' as const } : {}),
+    provider: knownProvider(parsed.provider, 'custom'),
     baseURL: typeof parsed.baseURL === 'string' ? parsed.baseURL : '',
     model: typeof parsed.model === 'string' ? parsed.model : '',
     apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey : '',
@@ -122,6 +122,10 @@ export function writePilot(settings: PilotInput): void {
   const previous = readPilot();
   const next: PilotSettings = {
     ...((settings.mode ?? previous.mode) === 'local' ? { mode: 'local' as const } : {}),
+    provider:
+      settings.provider === undefined
+        ? previous.provider
+        : knownProvider(settings.provider, 'custom'),
     baseURL: settings.baseURL.trim().replace(/\/+$/, ''),
     model: settings.model.trim(),
     apiKey: settings.apiKey.trim(),
@@ -173,23 +177,26 @@ export function resetPilotStore(): void {
   edits = 0;
 }
 
-/** Local mode needs no credentials; loading the model is a separate explicit action. */
 export function pilotReady(settings: PilotInput): boolean {
   return (
     settings.mode === 'local' ||
-    (settings.baseURL !== '' && settings.model !== '' && settings.apiKey !== '')
+    (settings.baseURL !== '' &&
+      settings.model !== '' &&
+      (settings.apiKey !== '' || !providerNeedsKey(settings.provider)))
   );
 }
 
-/** Off asks the provider to skip reasoning; on leaves the model's default alone. */
 export function reasoningOf(settings: PilotInput): 'provider-default' | 'none' {
   return settings.thinking === false ? 'none' : 'provider-default';
 }
 
-/** Stored k token → tokens. Vendors count 8k as 8000, 128k as 128000. */
 export function contextTokensOf(k: number | null): number | null {
   if (k == null) return null;
   return k * 1000;
+}
+
+function knownProvider(value: unknown, fallback: string): string {
+  return typeof value === 'string' && providerById(value) !== null ? value : fallback;
 }
 
 function positiveInt(value: unknown): number | null {

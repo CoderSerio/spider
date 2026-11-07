@@ -155,11 +155,29 @@ describe('runAgent', () => {
     expect(aiControl.provider!).toHaveBeenCalledWith('model-1');
     const options = aiControl.streamText.mock.calls[0][0] as Record<string, unknown>;
     expect(options.messages).toEqual([{ role: 'user', content: 'go' }]);
-    expect(String(options.system)).toContain('你是用户养在这座片岛上的活跃的蜘蛛');
+    expect(String(options.system)).toContain('你叫蛛小八，是住在蛛岛上的活跃的蜘蛛');
     expect(options.toolCallConcurrency).toBe(1);
     expect(options.stopWhen).toEqual({ until: 'finished' });
     expect(options.reasoning).toBe('provider-default');
     expect(options.tools).toBeTypeOf('object');
+  });
+
+  it('gives a keyless Ollama endpoint a placeholder Key', async () => {
+    stream([]);
+    await runAgent({
+      goal: 'go',
+      session: fakeSession(),
+      settings: {
+        ...settings,
+        provider: 'ollama',
+        baseURL: 'http://localhost:11434/v1',
+        apiKey: '',
+      },
+    });
+    expect(aiControl.providerOptions).toMatchObject({
+      baseURL: 'http://localhost:11434/v1',
+      apiKey: 'ollama',
+    });
   });
 
   it('asks the model not to reason when thinking is off', async () => {
@@ -379,7 +397,7 @@ it('uses local transport with bounded basic actions and a fresh instruction cont
   });
   expect(aiControl.provider).toHaveBeenCalledWith('Qwen3-0.6B-q4f16_1-MLC');
   const options = aiControl.streamText.mock.calls[0][0];
-  expect(Object.keys(options.tools)).toEqual(['observe', 'walk', 'turn', 'set_height']);
+  expect(Object.keys(options.tools)).toEqual(['observe', 'go', 'set_height']);
   expect(options.stopWhen).toEqual([{ until: 'finished' }, { count: 6 }]);
   expect(options.maxRetries).toBe(0);
   expect(JSON.stringify(options.messages)).not.toContain('old instruction');

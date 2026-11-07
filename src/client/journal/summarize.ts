@@ -1,6 +1,7 @@
 import { LOCAL_MODEL } from '../local/types.js';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { generateText, type LanguageModelUsage } from 'ai';
+import { apiKeyFor } from '../providers.js';
 import { reasoningOf, type PilotSettings } from '../settings.js';
 
 export interface DiaryNote {
@@ -9,7 +10,6 @@ export interface DiaryNote {
   usage?: LanguageModelUsage;
 }
 
-/** Turn a day's transcript into a directory line and a summary. Noted text stays put. */
 export async function summarizeDiary(input: {
   settings: PilotSettings;
   transcript: string;
@@ -21,7 +21,7 @@ export async function summarizeDiary(input: {
     name: 'openai-compatible',
     baseURL: local ? 'http://local.invalid/v1' : input.settings.baseURL,
     ...(local ? { fetch: (await import('../local/fetch.js')).localFetch } : {}),
-    apiKey: input.settings.apiKey,
+    apiKey: apiKeyFor(input.settings),
   });
   const result = await generateText({
     model: provider(local ? LOCAL_MODEL : input.settings.model),
@@ -58,9 +58,7 @@ export function readNote(text: string): DiaryNote {
       const line = typeof parsed.line === 'string' ? parsed.line.trim() : '';
       const summary = typeof parsed.summary === 'string' ? parsed.summary.trim() : '';
       if (line || summary) return { line: line.slice(0, 80), summary };
-    } catch {
-      // The model answered in prose. Keep that prose.
-    }
+    } catch {}
   }
   const summary = text.trim();
   return { line: summary.slice(0, 40), summary };

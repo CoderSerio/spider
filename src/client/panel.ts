@@ -1,8 +1,11 @@
 import { bindLocalPanel } from './local/panel.js';
 import { closeDialog, showDialog } from '../ui/dialog/index.js';
+import { h } from '../ui/dom/index.js';
 import { placeTail } from '../ui/dress.js';
 import type { MenuSelect } from '../ui/select/index.js';
+import { paint as style } from '../ui/style.js';
 import { enhanceSwitch, reflectSwitch } from '../ui/switch/index.js';
+import { border, color } from '../ui/token.js';
 import { openJournal, type Journal, type OpenedJournal } from './journal/api.js';
 import { flushSoon, flushWorld, onRestore, setPending, type BootNote } from './worldStore.js';
 import type { Trace } from './journal/session.js';
@@ -12,17 +15,15 @@ import { bindLeave } from './panel/leave.js';
 import { bindMemory } from './panel/memory.js';
 import { bindUsage } from './panel/usage.js';
 import { explain, isAbort, numberOrNull, thoughtOf } from './panel/helpers.js';
+import { QUICK_PROVIDERS, discoverModels, type ModelProvider } from './providers.js';
 import { pilotReady, readPilot, writePilot, type PilotSettings } from './settings.js';
 import type { Stage } from './stage.js';
 import type { SimSession } from '../shared/sim/session.js';
 
 const BUBBLE_MS = 5000;
-/** How long the page must go untouched before auto memory may run. */
 export const AUTO_MEMORY_IDLE_MS = 30 * 60 * 1000;
-/** How often to check whether that idle stretch has passed. */
 const AUTO_MEMORY_CHECK_MS = 60 * 1000;
 
-/** Settings, the instruction box, and the bubble that follows the spider. */
 export function mountPanel(
   doc: Document,
   session: SimSession,
@@ -122,7 +123,6 @@ export function mountPanel(
   });
 
   let current: AbortController | null = null;
-  /** Runs replaced by a new message. They stop quietly, without a "已停止" note. */
   const replaced = new WeakSet<AbortController>();
   let live: HTMLLIElement | null = null;
   let hideAt = 0;
@@ -178,7 +178,6 @@ export function mountPanel(
       live.textContent = '';
       trace.append(live);
     }
-    /* v8 ignore next */
     live.textContent = `${live.textContent ?? ''}${chunk}`;
     touch();
     stage.voice();
@@ -191,6 +190,10 @@ export function mountPanel(
     if (!(element instanceof HTMLInputElement)) throw new Error(`Missing settings field ${name}`);
     return element;
   };
+
+  const providerCards = [...settingsForm.querySelectorAll<HTMLButtonElement>('[data-provider]')];
+  const quickStatus = doc.querySelector<HTMLElement>('#quick-status')!;
+  const quickModels = doc.querySelector<HTMLElement>('#quick-models')!;
 
   const modelFields = (): {
     baseURL: string;
@@ -209,6 +212,15 @@ export function mountPanel(
   });
   let shownFields: ReturnType<typeof modelFields> | null = null;
 
+  const paintQuickProviders = (id: string): void => {
+    for (const card of providerCards) {
+      const on = card.dataset.provider === id;
+      card.setAttribute('aria-pressed', String(on));
+      card.style.border = on ? border.ink : border.hairline;
+      card.style.background = on ? color.paperDeep : color.paper;
+    }
+  };
+
   const fill = (settings: PilotSettings): void => {
     field('localModel').checked = settings.mode === 'local';
     reflectSwitch(field('localModel'));
@@ -220,8 +232,84 @@ export function mountPanel(
       settings.contextTokens == null ? '' : String(settings.contextTokens);
     field('thinking').checked = settings.thinking;
     reflectSwitch(field('thinking'));
+    paintQuickProviders(settings.provider);
     shownFields = modelFields();
   };
+
+  const paintQuickModels = (): void => {
+    const active = field('model').value.trim();
+    for (const chip of quickModels.querySelectorAll<HTMLButtonElement>('[data-quick-model]')) {
+      const on = chip.dataset.quickModel === active;
+      chip.setAttribute('aria-pressed', String(on));
+      chip.style.border = on ? border.ink : border.hairline;
+      chip.style.background = on ? color.ink : color.paper;
+      chip.style.color = on ? color.paper : color.ink;
+    }
+  };
+
+  const modelChip = (id: string): HTMLButtonElement => {
+    const chip = h(doc, 'button', { type: 'button', 'data-quick-model': id }, id);
+    style(chip, {
+      border: border.hairline,
+      padding: '4px 9px',
+      background: color.paper,
+      color: color.ink,
+      font: 'inherit',
+      letterSpacing: 'inherit',
+      cursor: 'pointer',
+    });
+    chip.addEventListener('click', () => {
+      field('model').value = id;
+      persist();
+      paintQuickModels();
+    });
+    return chip;
+  };
+
+  let discoverRun = 0;
+  const loadQuickModels = async (provider: ModelProvider): Promise<void> => {
+    const runId = ++discoverRun;
+    quickStatus.textContent = '正在读取本机模型…';
+    quickModels.replaceChildren();
+    try {
+      const found = await discoverModels(provider.baseURL, '');
+      if (runId !== discoverRun) return;
+      quickModels.replaceChildren(...found.map(modelChip));
+      paintQuickModels();
+      quickStatus.textContent =
+        found.length === 0
+          ? '连上了，但还没有模型。先在终端运行 ollama pull <模型名>。'
+          : `找到 ${found.length} 个模型，点一个填进 Model ID。`;
+    } catch {
+      if (runId !== discoverRun) return;
+      quickStatus.textContent = `没连上 ${provider.name}。确认它已经运行，并允许这个页面访问。`;
+    }
+  };
+
+  const quickImport = (provider: ModelProvider): void => {
+    const saved = readPilot();
+    writePilot({
+      ...saved,
+      provider: provider.id,
+      baseURL: provider.baseURL,
+      model: saved.provider === provider.id ? saved.model : provider.model,
+    });
+    fill(readPilot());
+    paint();
+    quickModels.replaceChildren();
+    if (!provider.discover) {
+      quickStatus.textContent = '地址和模型已经填好，补上或确认 API Key 就能用。';
+      field('apiKey').focus();
+      return;
+    }
+    void loadQuickModels(provider);
+  };
+
+  for (const provider of QUICK_PROVIDERS) {
+    settingsForm
+      .querySelector<HTMLButtonElement>(`[data-provider="${provider.id}"]`)!
+      .addEventListener('click', () => quickImport(provider));
+  }
 
   const pages = {
     model: panelModel,
@@ -268,6 +356,11 @@ export function mountPanel(
     for (const name of ['baseURL', 'model', 'apiKey'] as const) {
       if (values[name] !== shownFields[name]) {
         next[name] = values[name];
+        if (name === 'baseURL') {
+          next.provider = 'custom';
+          quickModels.replaceChildren();
+          quickStatus.textContent = '';
+        }
         changed = true;
       }
     }
@@ -287,6 +380,7 @@ export function mountPanel(
     if (!changed) return;
     writePilot(next);
     shownFields = values;
+    paintQuickProviders(next.provider);
     paint();
   };
 
@@ -304,7 +398,6 @@ export function mountPanel(
   let journal: Journal | null = null;
   let lastActivity = Date.now();
   let digesting = false;
-  /** When a failed digest may be tried again. */
   let digestRetryAt = 0;
   const journalReady = Promise.resolve(injected ?? openJournal())
     .then((opened) => {
@@ -324,7 +417,6 @@ export function mountPanel(
     window.addEventListener(type, noteActivity, { passive: true });
   }
 
-  /** Write the day into the diary once the page has been quiet long enough. */
   const rememberIfIdle = (): void => {
     if (current || digesting) return;
     const settings = readPilot();
@@ -491,8 +583,6 @@ export function mountPanel(
     }
   };
 
-  // A click on 停止 aborts. Enter submits, and a typed message replaces the run.
-  // Keyboard activation of this button reports detail 0, so Enter still submits.
   send.addEventListener('click', (event) => {
     if (!current || event.detail === 0) return;
     event.preventDefault();
@@ -548,7 +638,6 @@ export function mountPanel(
       tailNode.hidden = true;
       return;
     }
-    /* v8 ignore next */
     const text = trace.textContent ?? '';
     if (trace.hidden || text !== bubbleText) {
       trace.hidden = false;

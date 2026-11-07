@@ -1,9 +1,6 @@
 import { Vector3 } from 'three';
 import { BONES } from '../config.js';
 
-// 骨长是身体的尺寸，不是可以拉长的弹簧。够不到时把落点收回来，
-// 碰撞只把关节推出地面、土丘和圆的东西，再把超长的一节收回去。
-
 export interface LegSphere {
   x: number;
   y: number;
@@ -27,7 +24,6 @@ const push = new Vector3();
 const delta = new Vector3();
 const aim = new Vector3();
 
-/** 脚可以站住的高度：地面、土丘，以及脚正下方的圆东西的顶。 */
 export function supportY(
   x: number,
   z: number,
@@ -41,19 +37,14 @@ export function supportY(
   for (const sphere of spheres) {
     const dx = x - sphere.x;
     const dz = z - sphere.z;
-    const horizontal = Math.hypot(dx, dz);
-    if (horizontal >= sphere.radius) continue;
-    const top = sphere.y + Math.sqrt(sphere.radius * sphere.radius - horizontal * horizontal);
+    const squared = dx * dx + dz * dz;
+    if (squared >= sphere.radius * sphere.radius) continue;
+    const top = sphere.y + Math.sqrt(sphere.radius * sphere.radius - squared);
     if (top > y) y = top;
   }
   return y;
 }
 
-/**
- * 四节腿。够得着时和原来的弓形一样；够不着时只把踝关节收到
- * 股节加胫节的长度里，不把任何一节画得比它的骨长更长。
- * `out` 要有 5 个点：肩、基节、膝、踝、爪。
- */
 export function solveLeg(
   shoulder: Vector3,
   foot: Vector3,
@@ -89,7 +80,6 @@ function writeLegacy(
   ankle.y = foot.y + 0.08;
   end.copy(foot);
 
-  // 踝离基节太远时，胫节会被画长。把踝沿这条腿收回来，爪跟着踝走。
   reach.subVectors(ankle, coxa);
   const span = reach.length();
   const limit = BONES[1].len + BONES[2].len - 0.04;
@@ -122,7 +112,6 @@ function relax(
         sample.lerpVectors(points[bone], points[bone + 1], t);
         if (!shove(sample, radius, ground, mound, spheres, push)) continue;
         moved = true;
-        // 肩连在身体上，不能被腿的碰撞拽走。
         if (bone === 0) points[1].add(push);
         else {
           points[bone].addScaledVector(push, 1 - t);
@@ -136,7 +125,6 @@ function relax(
   clampChain(points);
 }
 
-/** 从肩往外，任何一节都不许超过自己的骨长。 */
 function clampChain(points: Vector3[]): void {
   for (let bone = 0; bone < 4; bone++) {
     delta.subVectors(points[bone + 1], points[bone]);
@@ -162,9 +150,10 @@ function shove(
     const dx = at.x - sphere.x;
     const dy = at.y - sphere.y;
     const dz = at.z - sphere.z;
-    const dist = Math.hypot(dx, dy, dz);
     const min = sphere.radius + radius;
-    if (dist >= min) continue;
+    const squared = dx * dx + dy * dy + dz * dz;
+    if (squared >= min * min) continue;
+    const dist = Math.sqrt(squared);
     if (dist < 1e-6) {
       out.y += min;
       continue;
@@ -177,7 +166,6 @@ function shove(
   return out.lengthSq() > 0;
 }
 
-/** 两节骨头的膝：沿 reach 伸出 len1，再朝 pole 抬起。 */
 function bendJoint(
   a: Vector3,
   b: Vector3,

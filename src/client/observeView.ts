@@ -8,6 +8,7 @@ import {
   LineSegments,
   Mesh,
   MeshBasicMaterial,
+  Matrix4,
   Vector3,
   type Camera,
 } from 'three';
@@ -23,9 +24,15 @@ import type { Spider } from '../shared/sim/Spider.js';
 
 const RING = 72;
 const OBSERVE_REFRESH_MS = 100;
-const NAME: Record<string, string> = { apple: '苹果', grass: '草', nest: '巢' };
+const NAME: Record<string, string> = {
+  apple: '苹果',
+  grass: '草',
+  nest: '巢',
+  tree: '树',
+  stone: '石',
+  'bog-stone': '沼石',
+};
 
-/** God view of what the spider can sense. The chase camera stays as it is. */
 export class ObserveOverlay {
   readonly #root = new Group();
   readonly #viewRing: Line;
@@ -37,13 +44,17 @@ export class ObserveOverlay {
   readonly #layer: HTMLElement;
   readonly #readout: HTMLElement;
   readonly #pins: HTMLElement;
-  /** One span per visible entity, reused so the DOM is not rebuilt every frame. */
   readonly #nodes = new Map<string, HTMLSpanElement>();
   readonly #at = new Map<string, { x: number; y: number; z: number }>();
   #observation: Observation | null = null;
   #observedAt = Number.NEGATIVE_INFINITY;
   #ringAt = { x: Number.NaN, z: Number.NaN, view: Number.NaN, lift: Number.NaN };
   #aheadAt = { x: Number.NaN, z: Number.NaN, heading: Number.NaN, open: Number.NaN };
+  readonly #pinCamera = new Matrix4();
+  readonly #pinProjection = new Matrix4();
+  #pinsDirty = true;
+  #pinWidth = Number.NaN;
+  #pinHeight = Number.NaN;
 
   constructor(parent: HTMLElement) {
     const ink = new LineBasicMaterial({ color: PALETTE.ink });
@@ -92,12 +103,12 @@ export class ObserveOverlay {
     return this.#root;
   }
 
-  /** Drop cached rings and the last look. A new island is a different height field. */
   reset(): void {
     this.#observation = null;
     this.#observedAt = Number.NEGATIVE_INFINITY;
     this.#ringAt = { x: Number.NaN, z: Number.NaN, view: Number.NaN, lift: Number.NaN };
     this.#aheadAt = { x: Number.NaN, z: Number.NaN, heading: Number.NaN, open: Number.NaN };
+    this.#pinsDirty = true;
   }
 
   sync(
@@ -118,14 +129,14 @@ export class ObserveOverlay {
     const z = spider.root.position.z;
     const height = (px: number, pz: number) => world.terrain.height(px, pz);
     const walk = (px: number, pz: number) => surfaceOf(world.terrain, px, pz);
-    const eye = walk(x, z) + EYE_HEIGHT + spider.heightSet;
-    const distance = grassHere(x, z, world.entities, eye)
-      ? Math.min(VIEW_DISTANCE, GRASS_VIEW)
-      : VIEW_DISTANCE;
     const now = performance.now();
     let observation = this.#observation;
     let fresh = false;
     if (!observation || now - this.#observedAt >= OBSERVE_REFRESH_MS) {
+      const eye = walk(x, z) + EYE_HEIGHT + spider.heightSet;
+      const distance = grassHere(x, z, world.entities, eye)
+        ? Math.min(VIEW_DISTANCE, GRASS_VIEW)
+        : VIEW_DISTANCE;
       observation = toObservation(spider.capture(), world, REACH, distance, REACH_Y);
       this.#observation = observation;
       this.#observedAt = now;
@@ -133,9 +144,6 @@ export class ObserveOverlay {
     }
     const ground = (px: number, pz: number) => walk(px, pz) + 0.14;
 
-    // The rings depend on where the body stands, how high it has reared, and
-    // how far it sees, not on the camera. They only need to keep up with the
-    // observation; re-tracing 72 bearings every frame stutters the view.
     const ring = this.#ringAt;
     const lift = observation.self.height;
     if (
@@ -185,12 +193,12 @@ export class ObserveOverlay {
 
     if (fresh) {
       this.#layout(x, z, observation, world, ground);
-      this.#readout.textContent = this.#readoutOf(observation);
+      const readout = this.#readoutOf(observation);
+      if (this.#readout.textContent !== readout) this.#readout.textContent = readout;
     }
     this.#place(camera, view);
   }
 
-  /** Marks and labels, only when a new observation arrives. */
   #layout(
     x: number,
     z: number,
@@ -198,6 +206,8 @@ export class ObserveOverlay {
     world: WorldState,
     ground: (x: number, z: number) => number,
   ): void {
+    ensureTickCapacity(this.#marks, world.entities.length);
+    ensureTickCapacity(this.#dim, world.entities.length);
     const seen = new Map(observation.entities.map((entity) => [entity.id, entity]));
     const live = new Set<string>();
     let inkCount = 0;
@@ -240,6 +250,7 @@ export class ObserveOverlay {
         pin.className = 'observe-pin';
         this.#pins.append(pin);
         this.#nodes.set(entity.id, pin);
+        this.#pinsDirty = true;
       }
       if (pin.dataset.state !== state) {
         pin.dataset.state = state;
@@ -247,7 +258,12 @@ export class ObserveOverlay {
       }
       const label = `${entity.id}　${name}　${note}${climb}`;
       if (pin.textContent !== label) pin.textContent = label;
-      this.#at.set(entity.id, { x: entity.x, y: ground(entity.x, entity.z) + 0.4, z: entity.z });
+      const py = ground(entity.x, entity.z) + 0.4;
+      const previous = this.#at.get(entity.id);
+      if (!previous || previous.x !== entity.x || previous.y !== py || previous.z !== entity.z) {
+        this.#at.set(entity.id, { x: entity.x, y: py, z: entity.z });
+        this.#pinsDirty = true;
+      }
     }
 
     for (const [id, pin] of this.#nodes) {
@@ -255,6 +271,7 @@ export class ObserveOverlay {
       pin.remove();
       this.#nodes.delete(id);
       this.#at.delete(id);
+      this.#pinsDirty = true;
     }
 
     (this.#marks.geometry.getAttribute('position') as BufferAttribute).needsUpdate = true;
@@ -263,20 +280,33 @@ export class ObserveOverlay {
     this.#dim.geometry.setDrawRange(0, dimCount * 4);
   }
 
-  /** Screen positions follow the camera every frame; the spans themselves stay put. */
   #place(camera: Camera, view: { width: number; height: number }): void {
+    camera.updateMatrixWorld();
+    if (
+      !this.#pinsDirty &&
+      this.#pinWidth === view.width &&
+      this.#pinHeight === view.height &&
+      this.#pinCamera.equals(camera.matrixWorldInverse) &&
+      this.#pinProjection.equals(camera.projectionMatrix)
+    )
+      return;
+    this.#pinsDirty = false;
+    this.#pinWidth = view.width;
+    this.#pinHeight = view.height;
+    this.#pinCamera.copy(camera.matrixWorldInverse);
+    this.#pinProjection.copy(camera.projectionMatrix);
     for (const [id, pin] of this.#nodes) {
-      const at = this.#at.get(id);
-      /* v8 ignore next */
-      if (!at) continue;
+      const at = this.#at.get(id)!;
       const point = project(camera, at.x, at.y, at.z, view);
       if (!point) {
-        pin.hidden = true;
+        if (!pin.hidden) pin.hidden = true;
         continue;
       }
-      pin.hidden = false;
-      pin.style.left = `${point.x}px`;
-      pin.style.top = `${point.y}px`;
+      if (pin.hidden) pin.hidden = false;
+      const left = `${point.x}px`;
+      const top = `${point.y}px`;
+      if (pin.style.left !== left) pin.style.left = left;
+      if (pin.style.top !== top) pin.style.top = top;
     }
   }
 
@@ -310,7 +340,7 @@ export class ObserveOverlay {
       `看见 ${observation.view}　够得着 ${REACH}　${front}`,
       `背上 ${carrying}　超出视线 ${observation.beyond}　被挡住 ${observation.hidden}`,
       pool,
-      ...observation.self.ways,
+      ...observation.self.ways.map((way) => `可走到 ${way.x}, ${way.z}（${meters(way.open)} 米）`),
     ].join('\n');
   }
 }
@@ -327,7 +357,6 @@ function ringGeometry(): BufferGeometry {
   );
 }
 
-/** A fan from the body to the sight outline. One triangle per bearing. */
 function fillGeometry(): BufferGeometry {
   const geometry = new BufferGeometry();
   geometry.setAttribute('position', new BufferAttribute(new Float32Array((RING + 1) * 3), 3));
@@ -354,6 +383,14 @@ function tickGeometry(count: number): BufferGeometry {
     'position',
     new BufferAttribute(new Float32Array(count * 4 * 3), 3),
   );
+}
+
+function ensureTickCapacity(lines: LineSegments, count: number): void {
+  let capacity = lines.geometry.getAttribute('position').count / 4;
+  if (capacity >= count) return;
+  while (capacity < count) capacity *= 2;
+  lines.geometry.dispose();
+  lines.geometry = tickGeometry(capacity);
 }
 
 function layRing(

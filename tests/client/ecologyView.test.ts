@@ -1,12 +1,47 @@
+import { PALETTE } from '../../src/shared/config.js';
 import { describe, expect, it, vi } from 'vitest';
 import { applyEcologyLighting, EcologySky } from '../../src/client/ecologyView.js';
+import { buildIsland } from '../../src/client/groundView.js';
 import { worldClock } from '../../src/shared/ecology.js';
-import { Color, Vector3 } from 'three';
-import { PALETTE } from '../../src/shared/config.js';
+import { Color, InstancedMesh, Matrix4, Mesh, Vector3 } from 'three';
 
 describe('applyEcologyLighting', () => {
+  it('draws the original 159 cloud puffs in 28 independently culled batches', () => {
+    const sky = new EcologySky();
+    const clouds = sky.clouds.children as InstancedMesh[];
+    expect(clouds).toHaveLength(28);
+    expect(clouds.every((cloud) => cloud instanceof InstancedMesh)).toBe(true);
+    expect(clouds.reduce((count, cloud) => count + cloud.count, 0)).toBe(159);
+    expect(new Set(clouds.map((cloud) => cloud.geometry)).size).toBe(1);
+    expect(new Set(clouds.map((cloud) => cloud.material)).size).toBe(4);
+    const matrix = new Matrix4();
+    for (const cloud of clouds) {
+      expect(cloud.children).toHaveLength(0);
+      expect(cloud.frustumCulled).toBe(true);
+      expect(cloud.castShadow).toBe(false);
+      expect(cloud.receiveShadow).toBe(false);
+      expect(cloud.boundingSphere!.radius).toBeGreaterThan(0);
+      for (let i = 0; i < cloud.count; i++) {
+        cloud.getMatrixAt(i, matrix);
+        const center = new Vector3().setFromMatrixPosition(matrix);
+        expect(cloud.boundingBox!.containsPoint(center)).toBe(true);
+      }
+    }
+    const instances = clouds.map((cloud) => Array.from(cloud.instanceMatrix.array));
+    const versions = clouds.map((cloud) => cloud.instanceMatrix.version);
+    const positions = clouds.map((cloud) => cloud.position.clone());
+    const clock = worldClock(new Date(2026, 0, 1, 12));
+    for (let i = 0; i < 120; i++) sky.update(clock, new Vector3(), false, 1 / 60);
+    expect(clouds.every((cloud, i) => !cloud.position.equals(positions[i]))).toBe(true);
+    expect(clouds.map((cloud) => Array.from(cloud.instanceMatrix.array))).toEqual(instances);
+    expect(clouds.map((cloud) => cloud.instanceMatrix.version)).toEqual(versions);
+    const disposals = clouds.map((cloud) => vi.spyOn(cloud, 'dispose'));
+    sky.dispose();
+    for (const disposal of disposals) expect(disposal).toHaveBeenCalledOnce();
+  });
+
   it('updates the renderer and returns the local clock', () => {
-    const renderer = { setClearColor: vi.fn() };
+    const renderer = { setClearColor: vi.fn((_color: Color) => undefined) };
     const noon = applyEcologyLighting(renderer, new Date(2026, 0, 1, 12));
     const night = applyEcologyLighting(renderer, new Date(2026, 0, 1, 23));
 
@@ -38,7 +73,6 @@ describe('applyEcologyLighting', () => {
     const focus = new Vector3();
     for (const hour of [8, 12, 16]) {
       sky.update(worldClock(new Date(2026, 0, 1, hour)), focus, false);
-      // Lambert diffuse response on upward-facing paper, matching Three's BRDF.
       const shadow = sky.ambient.color.clone().multiplyScalar(sky.ambient.intensity / Math.PI);
       const altitude = sky.light.position.clone().sub(sky.light.target.position).normalize().y;
       const lit = shadow
@@ -69,10 +103,28 @@ describe('applyEcologyLighting', () => {
       expect(color.getHex()).toBe(PALETTE.paper);
     }
     expect(backgrounds[3].r).toBeLessThan(backgrounds[0].r * 0.3);
+    expect(backgrounds[3].r).toBeLessThan(0.05);
     const sky = new EcologySky();
-    sky.update(worldClock(new Date(2026, 0, 1, 23)), new Vector3(), false);
-    expect(sky.ambient.intensity / Math.PI).toBeLessThan(0.2);
+    const focus = new Vector3();
+    sky.update(worldClock(new Date(2026, 0, 1, 23)), focus, false);
+    const fill = sky.ambient.color.clone().multiplyScalar(sky.ambient.intensity / Math.PI);
+    const altitude = sky.light.position.clone().sub(sky.light.target.position).normalize().y;
+    const moon = sky.light.color.clone().multiplyScalar((sky.light.intensity * altitude) / Math.PI);
+    for (const value of fill.toArray()) expect(value).toBeLessThan(0.02);
+    for (const value of fill.clone().add(moon).toArray()) expect(value).toBeLessThan(0.05);
     expect(sky.moon.visible).toBe(true);
     sky.dispose();
+  });
+
+  it('dims the unlit water at night and restores it at noon', () => {
+    const water = buildIsland(() => 0).getObjectByName('water') as Mesh;
+    const renderer = { setClearColor: vi.fn((_color: Color) => undefined) };
+    applyEcologyLighting(renderer, new Date(2026, 0, 1, 23));
+    const night = renderer.setClearColor.mock.calls.at(-1)![0] as Color;
+    const brightness = night.r;
+    applyEcologyLighting(renderer, new Date(2026, 0, 1, 12));
+    const day = renderer.setClearColor.mock.calls.at(-1)![0] as Color;
+    expect(day.r).toBeGreaterThan(brightness);
+    expect(water.name).toBe('water');
   });
 });

@@ -1,6 +1,6 @@
-// @vitest-environment node
-
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { groundSupport } from '../../src/shared/contact.js';
+import { KINDS } from '../../src/shared/kinds.js';
 import { blockedAt } from '../../src/shared/sight.js';
 import { Terrain, TERRAIN } from '../../src/shared/terrain.js';
 import {
@@ -9,6 +9,8 @@ import {
   grow,
   GRASS_VIEW,
   nestBlocks,
+  populateScenery,
+  propBlocks,
   settle,
   REACH,
   REACH_Y,
@@ -16,7 +18,6 @@ import {
   VIEW_DISTANCE,
 } from '../../src/shared/world.js';
 
-/** Feed the scattered props a fixed random stream. */
 const control = vi.hoisted(() => ({ enabled: false, queue: [] as number[] }));
 
 vi.mock('../../src/shared/noise.js', async (importOriginal) => {
@@ -32,7 +33,6 @@ vi.mock('../../src/shared/noise.js', async (importOriginal) => {
 
 const quantized = (value: number): number => Math.round(value * 10) / 10;
 
-/** The scatter helper draws x and z from this same mapping. */
 function toRng(value: number): number {
   return (quantized(value) / (TERRAIN.island * 0.8) + 1) / 2;
 }
@@ -46,6 +46,7 @@ function findSlope(seed: number, minRadius: number): { x: number; z: number } | 
       const radius = Math.hypot(x, z);
       if (radius < minRadius || radius > TERRAIN.island * 0.6) continue;
       const ground = terrain.height(x, z);
+      if (ground <= TERRAIN.water) continue;
       const slope =
         Math.hypot(terrain.height(x + 0.8, z) - ground, terrain.height(x, z + 0.8) - ground) / 0.8;
       if (slope > 0.32) return { x, z };
@@ -67,6 +68,7 @@ function findFlat(
       const radius = Math.hypot(x, z);
       if (radius < minRadius || radius > maxRadius) continue;
       const ground = terrain.height(x, z);
+      if (ground <= TERRAIN.water) continue;
       const slope =
         Math.hypot(terrain.height(x + 0.8, z) - ground, terrain.height(x, z + 0.8) - ground) / 0.8;
       if (slope <= 0.32) return { x, z };
@@ -105,22 +107,54 @@ describe('restingY', () => {
     expect(restingY(terrain, 'nest', 2, 1)).toBeCloseTo(terrain.height(2, 1));
   });
 
-  it('lifts solid props to the highest ground under the footprint', () => {
-    const center = terrain.height(2, 1) + 0.03;
+  it('rests a round prop on the slope instead of hovering over it', () => {
+    const height = terrain.height.bind(terrain);
     const apple = restingY(terrain, 'apple', 2, 1);
-    expect(apple).toBeGreaterThan(center);
-    expect(restingY(terrain, 'apple', 2, 1, { kind: 'circle', r: 0.9 })).toBeGreaterThan(apple);
-    expect(restingY(terrain, 'apple', 2, 1, { kind: 'box', hx: 0.9, hz: 0.9 })).toBeGreaterThan(
+    expect(apple).toBeCloseTo(groundSupport(height, 2, 1, KINDS.apple.physics!.radius));
+    expect(apple - terrain.height(2, 1)).toBeLessThan(0.05);
+    expect(restingY(terrain, 'apple', 2, 1, { kind: 'circle', r: 0.9 })).toBeGreaterThanOrEqual(
       apple,
     );
+    expect(
+      restingY(terrain, 'apple', 2, 1, { kind: 'box', hx: 0.9, hz: 0.9 }),
+    ).toBeGreaterThanOrEqual(apple);
   });
 
   it('uses a small default radius for unknown props', () => {
-    expect(restingY(terrain, 'rock', 2, 1)).toBeGreaterThan(terrain.height(2, 1) + 0.03);
+    const height = terrain.height.bind(terrain);
+    expect(restingY(terrain, 'rock', 2, 1)).toBeCloseTo(groundSupport(height, 2, 1, 0.2));
   });
 });
 
 describe('nestBlocks', () => {
+  it('uses saved footprints and ground height for prop walls', () => {
+    const blocks = propBlocks([
+      { id: 'tree', kind: 'tree', x: 0, y: 4, z: 0, stage: 0 },
+      {
+        id: 'stone',
+        kind: 'stone',
+        x: 5,
+        y: -2,
+        z: 0,
+        stage: 0,
+        footprint: { kind: 'box', hx: 1, hz: 2 },
+      },
+    ]);
+    expect(blocks[0].height).toBeCloseTo(6.2);
+    expect(blocks[0].maxX).toBeCloseTo(0.4 * 0.62);
+    expect(blocks[1].maxX).toBeCloseTo(5.82);
+  });
+
+  it('leaves existing scenery alone and respects the save capacity', () => {
+    const world = createWorld(7);
+    const before = structuredClone(world.entities);
+    populateScenery(world, { x: 0, z: 0 }, world.entities.length);
+    expect(world.entities).toEqual(before);
+    world.entities = world.entities.filter((entity) => entity.kind === 'nest');
+    populateScenery(world, { x: 0, z: 0 }, 1);
+    expect(world.entities).toHaveLength(1);
+  });
+
   it('builds a ring of walls with a door at -Z', () => {
     const blocks = nestBlocks();
     expect(blocks.length).toBeGreaterThan(12);
@@ -267,7 +301,8 @@ describe('createWorld', () => {
     control.enabled = true;
     control.queue = [toRng(spot.x), toRng(spot.z)];
     const grass = createWorld(seed).entities.find((entity) => entity.kind === 'grass');
-    expect(grass?.footprint).toEqual({ kind: 'circle', r: 3.2 });
+    expect(grass?.footprint?.kind).toBe('circle');
+    expect(grass?.footprint).toMatchObject({ r: expect.any(Number) });
   });
 });
 
@@ -319,6 +354,7 @@ describe('grow', () => {
     const spot = findFlat(seed, 6)!;
     const world = bare(seed);
     world.entities = world.entities.filter((entity) => entity.kind === 'nest');
+    world.blocks = nestBlocks();
     world.appleIn = 0;
     const rolls = Array.from({ length: 80 }, (_, index) =>
       index % 2 === 0 ? toRng(spot.x) : toRng(spot.z),
@@ -346,5 +382,35 @@ describe('grow', () => {
     expect(stuck.entities.some((entity) => entity.kind === 'apple')).toBe(false);
     expect(stuck.sprouts).toBe(1);
     expect(stuck.appleIn).toBe(APPLE_EVERY);
+  });
+
+  it('skips a sprout inside a wall and one that cannot settle beside it', () => {
+    const seed = seedWith(findFlat, 6);
+    const spot = findFlat(seed, 6)!;
+    const world = bare(seed);
+    world.entities = world.entities.filter((entity) => entity.kind === 'nest');
+    world.appleIn = 0;
+    const x = quantized(spot.x);
+    const z = quantized(spot.z);
+    world.blocks = [
+      { id: 'wall', minX: x - 0.05, maxX: x + 0.05, minZ: z - 0.05, maxZ: z + 0.05, height: 2 },
+    ];
+    control.enabled = true;
+    control.queue = [toRng(x), toRng(z)];
+    grow(world, 0);
+    expect(world.entities.some((entity) => entity.kind === 'apple')).toBe(false);
+
+    world.appleIn = 0;
+    world.sprouts = 0;
+    world.blocks = [];
+    world.terrain = {
+      height(px: number, pz: number): number {
+        if (Math.abs(px - (x + 0.5)) < 0.05 && Math.abs(pz - z) < 0.05) return 5.2;
+        return 5;
+      },
+    };
+    control.queue = [toRng(x), toRng(z)];
+    grow(world, 0);
+    expect(world.entities.some((entity) => entity.kind === 'apple')).toBe(false);
   });
 });

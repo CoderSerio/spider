@@ -1,22 +1,30 @@
 import {
   Group,
+  BufferGeometry,
+  AdditiveBlending,
+  CatmullRomCurve3,
+  Mesh,
+  MeshBasicMaterial,
+  TubeGeometry,
   MathUtils,
   PerspectiveCamera,
   PCFShadowMap,
   Scene,
   Vector3,
-  WebGLRenderer,
-  type BufferGeometry,
   type Object3D,
 } from 'three';
+import { WebGPURenderer } from 'three/webgpu';
 import { PALETTE } from '../shared/config.js';
 import { kindOf } from '../shared/kinds.js';
 import { WORLD_RADIUS } from '../shared/terrain.js';
 import type { EntityState, WorldState } from '../shared/state.js';
 import type { Spider } from '../shared/sim/Spider.js';
 import { paintCanvas } from '../ui/dress.js';
+import { FpsDisplay } from './fps.js';
 import { buildIsland, tickWater } from './groundView.js';
+import { waterContact, waterSplashes } from './waterMotion.js';
 import { applyEcologyLighting, EcologySky, enableWorldShadows } from './ecologyView.js';
+import { Headlamp } from './headlamp.js';
 import { worldClock } from '../shared/ecology.js';
 import { ObserveOverlay } from './observeView.js';
 import { buildProp, drapeGrass } from './props.js';
@@ -48,8 +56,9 @@ const bubbleAt = new Vector3();
 
 /** Renderer and camera. It steps the one spider, then paints that same spider. */
 export class Stage {
+  readonly #fps: FpsDisplay;
   readonly #host: HTMLElement;
-  readonly #renderer: WebGLRenderer;
+  readonly #renderer: WebGPURenderer;
   readonly #scene = new Scene();
   readonly #camera: PerspectiveCamera;
   readonly #spider: Spider;
@@ -68,6 +77,16 @@ export class Stage {
   #resizeObserver!: ResizeObserver;
   #view = { left: 0, top: 0, width: 1, height: 1 };
   readonly #sound = createSound(window);
+  readonly #silk = new Mesh(
+    new TubeGeometry(new CatmullRomCurve3([new Vector3(), new Vector3()]), 8, 0.014, 6, false),
+    new MeshBasicMaterial({
+      color: 0xbffcff,
+      transparent: true,
+      opacity: 0.95,
+      blending: AdditiveBlending,
+      toneMapped: false,
+    }),
+  );
   #heard = false;
   readonly #wasLifted: boolean[] = [];
   /** Ids on the back last frame. Null until the first sync, so birth is silent. */
@@ -100,13 +119,19 @@ export class Stage {
   /** Ecology follows local wall time and only needs a once-per-second update. */
   #ecologySecond = -1;
   readonly #sky = new EcologySky();
+  readonly #lamp = new Headlamp();
   #clock = worldClock();
 
   constructor(host: HTMLElement, spider: Spider) {
     this.#host = host;
     this.#spider = spider;
 
-    this.#renderer = new WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    // WebGPURenderer defaults to a transparent canvas. The paper sky is opaque.
+    this.#renderer = new WebGPURenderer({
+      alpha: false,
+      antialias: true,
+      powerPreference: 'high-performance',
+    });
     this.#renderer.shadowMap.enabled = true;
     this.#renderer.shadowMap.type = PCFShadowMap;
     // Draw at the screen's own pixels, capped at 2, so the ink stays sharp.
@@ -114,12 +139,22 @@ export class Stage {
     this.#renderer.setClearColor(PALETTE.paper, 1);
     host.appendChild(this.#renderer.domElement);
     paintCanvas(this.#renderer.domElement);
+    this.#fps = new FpsDisplay(host);
 
     this.#camera = new PerspectiveCamera(VIEW.fov, 1, VIEW.near, VIEW.far);
     this.#observe = new ObserveOverlay(host);
     enableWorldShadows(this.#spider.root);
     enableWorldShadows(this.#spider.rig);
-    this.#scene.add(this.#spider.root, this.#spider.rig, this.#observe.object, this.#sky.object);
+    this.#scene.add(
+      this.#spider.root,
+      this.#spider.rig,
+      this.#observe.object,
+      this.#sky.object,
+      waterSplashes,
+    );
+    this.#silk.visible = true;
+
+    this.#lamp.attach(this.#spider);
 
     this.#bindEvents();
     this.#resize();
@@ -236,27 +271,60 @@ export class Stage {
 
     const back = this.#spider.root.position;
     const yaw = this.#spider.yaw;
-    const fx = -Math.sin(yaw);
-    const fz = -Math.cos(yaw);
-    // 背得多时排成两列，别让七只苹果从背上排到尾巴外面。
-    const rows = held.length > 3 ? 2 : 1;
-    const cols = Math.ceil(held.length / rows);
-    const rightX = -fz;
-    const rightZ = fx;
-    for (let index = 0; index < held.length; index++) {
-      const item = held[index];
+    // carrying 中的苹果使用自己的物理坐标；蜘蛛只通过蛛丝施加拉力。
+    for (const item of held) {
       alive.add(item.id);
-      const row = index % rows;
-      const col = Math.floor(index / rows);
-      const along = (col - (cols - 1) / 2) * 0.42;
-      const lateral = rows === 1 ? 0 : row === 0 ? -0.24 : 0.24;
-      this.#syncProp(
-        item,
-        back.x - fx * along + rightX * lateral,
-        back.y + 0.95,
-        back.z - fz * along + rightZ * lateral,
-        world,
+      this.#syncProp(item, item.x, item.y, item.z, world);
+    }
+
+    const interaction = this.#spider.interaction;
+    const target = held[0] ?? (interaction?.phase === 'drag' ? interaction.target : null);
+    if (target) {
+      if (!this.#silk.parent) {
+        this.#scene.add(this.#silk);
+      }
+      // spinneret 在腹部最后端，丝线从身体后方出发，而不是从肚子底部垂下。
+      // 腹部轮廓的最后尖端约在身体后方 1.7 个单位、甲壳高度附近。
+      // 端点略微嵌入模型，避免出现一小段悬空。
+      const abdomen = new Vector3(
+        back.x + Math.sin(yaw) * 1.62,
+        back.y + 0.82,
+        back.z + Math.cos(yaw) * 1.62,
       );
+      const toSpiderX = back.x - target.x;
+      const toSpiderZ = back.z - target.z;
+      const toSpiderLength = Math.hypot(toSpiderX, toSpiderZ) || 1;
+      const appleRadius = 0.32;
+      const silkEnd = new Vector3(
+        target.x + (toSpiderX / toSpiderLength) * appleRadius,
+        target.y + 0.34,
+        target.z + (toSpiderZ / toSpiderLength) * appleRadius,
+      );
+      const points = [abdomen];
+      for (let i = 1; i < 10; i++) {
+        const t = i / 10;
+        points.push(
+          new Vector3(
+            abdomen.x + (silkEnd.x - abdomen.x) * t,
+            abdomen.y + (silkEnd.y - abdomen.y) * t - Math.sin(Math.PI * t) * 0.18,
+            abdomen.z + (silkEnd.z - abdomen.z) * t,
+          ),
+        );
+      }
+      points.push(silkEnd);
+      this.#silk.geometry.dispose();
+      this.#silk.geometry = new TubeGeometry(
+        new CatmullRomCurve3(points),
+        Math.max(8, points.length * 2),
+        0.014,
+        6,
+        false,
+      );
+      this.#silk.visible = true;
+    } else {
+      if (this.#silk.parent) {
+        this.#scene.remove(this.#silk);
+      }
     }
 
     for (const [id, prop] of this.#props) {
@@ -334,9 +402,11 @@ export class Stage {
     el.removeEventListener('wheel', this.#onWheel);
     disposeGeometries(this.#scene);
     this.#sky.dispose();
+    this.#lamp.dispose();
     this.#renderer.dispose();
     this.#sound.dispose();
     el.remove();
+    this.#fps.element.remove();
   }
 
   #bindEvents(): void {
@@ -469,7 +539,7 @@ export class Stage {
     this.#last = now;
     if (!this.#held) this.#step?.(dt);
     this.#syncEcology();
-    tickWater(now * 0.001);
+    tickWater(now * 0.001, waterContact(this.#spider, this.#wasLifted, this.#world?.() ?? null));
     this.#syncWorld();
     this.#feedback();
 
@@ -480,9 +550,11 @@ export class Stage {
       this.#overlook,
       dt,
     );
+    this.#lamp.update(this.#clock, this.#spider.lamp);
     const world = this.#world?.();
     if (world) this.#observe.sync(this.#overlook, this.#camera, this.#spider, world, this.#view);
     this.#renderer.render(this.#scene, this.#camera);
+    this.#fps.tick(now);
     this.#onAnchor?.(this.#aboveSpider());
   };
 
@@ -527,12 +599,20 @@ export class Stage {
   }
 }
 
-/** Release geometry owned by a scene subtree without touching shared materials. */
+/** Release geometry owned by a scene subtree. Pooled splash geometry is kept. */
 function disposeGeometries(root: Object3D): void {
   const geometries = new Set<BufferGeometry>();
   root.traverse((node) => {
+    if (keepsGeometry(node)) return;
     const geometry = (node as Object3D & { geometry?: BufferGeometry }).geometry;
     if (geometry) geometries.add(geometry);
   });
   for (const geometry of geometries) geometry.dispose();
+}
+
+function keepsGeometry(node: Object3D): boolean {
+  for (let current: Object3D | null = node; current; current = current.parent) {
+    if (current.userData.retainGeometry === true) return true;
+  }
+  return false;
 }

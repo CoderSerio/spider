@@ -11,7 +11,6 @@ import type { UsageCall, UsageCallMeta, UsageRange, UsageSnapshot } from '../jou
 import type { PilotSettings } from '../settings.js';
 import type { JournalReply, JournalRequest, JournalResultMap } from './protocol.js';
 
-/** The slice of Worker the client needs. Tests supply their own. */
 export interface WorkerPort {
   postMessage(message: JournalRequest): void;
   onmessage: ((event: MessageEvent<JournalReply>) => void) | null;
@@ -23,7 +22,6 @@ interface Waiter {
   reject(error: Error): void;
 }
 
-/** A Diary-shaped proxy whose methods are messages to the journal worker. */
 export class WorkerJournal implements Journal, SnapshotStore, LocalBackend {
   readonly #port: WorkerPort;
   readonly #pending = new Map<number, Waiter>();
@@ -227,7 +225,6 @@ export class WorkerJournal implements Journal, SnapshotStore, LocalBackend {
   }
 }
 
-/** Start the browser worker and wait for its first state. */
 export async function createWorkerJournal(): Promise<WorkerJournal> {
   const worker = new Worker(new URL('./journal.worker.ts', import.meta.url), { type: 'module' });
   const journal = new WorkerJournal(worker as unknown as WorkerPort);

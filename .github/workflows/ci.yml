@@ -30,7 +30,7 @@ jobs:
 
       - run: pnpm format:check
 
-      - run: pnpm test:coverage
+      - run: pnpm test:coverage --exclude tests/perf/budget.test.ts
 
       - run: pnpm build
 

@@ -31,6 +31,7 @@ vi.mock('../../src/client/journal/summarize.js', async () => {
 });
 
 const settings: PilotSettings = {
+  provider: 'custom',
   baseURL: 'https://example.com',
   model: 'model-1',
   apiKey: 'key',
@@ -39,7 +40,6 @@ const settings: PilotSettings = {
   thinking: true,
 };
 
-/** Long enough that 1k tokens (80% of a 1k window) is already full. */
 const LONG = '一'.repeat(1600);
 
 function session(turns: ChatSession['turns'], summary = ''): ChatSession {

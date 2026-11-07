@@ -1,36 +1,35 @@
 import { propertiesOf } from './kinds.js';
-import { aheadAt, senseBody, waysAt, type Ahead, type NearbySolid } from './sense.js';
+import {
+  aheadAt,
+  senseBody,
+  waysAt,
+  type Ahead,
+  type NearbySolid,
+  type Waypoint,
+} from './sense.js';
 import { EYE_HEIGHT, grassHere, groundOccluded, insideHome, occluded, SIGHT_TOP } from './sight.js';
 
 import { surfaceOf } from './terrain.js';
 import { floatsAt, nearestShore, readWater, waterAt } from './water.js';
 import type { LightPeriod } from './ecology.js';
 
-/** How far a body can feel the nearest water and its shoreline. */
 export const WATER_SENSE = 8;
 
 export interface WaterSpot {
   x: number;
   z: number;
   distance: number;
-  /** Degrees off the heading, clockwise positive. */
   bearing: number;
-  /** Depth at the reported point. */
   depth: number;
-  /** Farthest connected water from that point, capped at the sense range. */
   span: number;
 }
 
-/** Dry ground within sensing range. Present only while the body is wet. */
 export interface ShoreSpot {
   x: number;
   z: number;
   distance: number;
-  /** Degrees off the heading, clockwise positive. */
   bearing: number;
 }
-
-/** Serializable simulation state, world state, and the observation format. */
 
 export interface Vec3 {
   x: number;
@@ -41,27 +40,22 @@ export interface Vec3 {
 export interface SpiderState {
   time: number;
   position: Vec3;
-  /** three.js yaw in radians; the body's forward is -Z rotated by this. */
   yaw: number;
   speed: number;
-  /** Target deck height, the value the lift keys move. */
   height: number;
   chassisPitch: number;
   chassisRoll: number;
   headYaw: number;
-  /** One entry per leg, in mount order. */
+  lamp?: boolean;
   feet: Vec3[];
 }
 
 export type Footprint = { kind: 'circle'; r: number } | { kind: 'box'; hx: number; hz: number };
 
-/** A place the spider has named and can walk back to. Not a physical body. */
 export interface PlaceMark {
-  /** Unique, trimmed name in the spider's own words. */
   name: string;
   x: number;
   z: number;
-  /** Optional line the spider left with the place. */
   note?: string;
 }
 
@@ -69,25 +63,19 @@ export interface EntityState {
   id: string;
   kind: string;
   x: number;
-  /** World height of the origin. */
   y: number;
   z: number;
-  /** How far an action has progressed. 0 is untouched. */
   stage: number;
-  /** Collision or cover size. Not reported in a look. */
   footprint?: Footprint;
-  /** Velocity for props that physics moves. */
   vx?: number;
   vy?: number;
   vz?: number;
-  /** Orientation of a body that rolls. Identity when omitted. */
   qx?: number;
   qy?: number;
   qz?: number;
   qw?: number;
 }
 
-/** A solid the spider cannot enter, and cannot see through. */
 export interface Block {
   id: string;
   minX: number;
@@ -101,25 +89,15 @@ export interface WorldState {
   seed: number;
   terrain: {
     height(x: number, z: number): number;
-    /** What a body stands on; the still water level over a hollow. Absent on fixtures. */
     surface?(x: number, z: number): number;
-    /** True while the point is still on the island. Absent on hand-built fixtures. */
     inside?(x: number, z: number, margin?: number): boolean;
   };
   entities: EntityState[];
   blocks: Block[];
-  /** Places the spider has named. They do not collide, block sight, or count as props. */
   marks: PlaceMark[];
-  /** What is on the spider's back, oldest first. Empty when it carries nothing. */
   carrying: EntityState[];
-  /**
-   * Seconds until the island may grow one apple. Only a world from `createWorld`
-   * has this. A hand-built fixture does not grow.
-   */
   appleIn?: number;
-  /** How many times this island has tried to grow an apple. */
   sprouts?: number;
-  /** The island's physical rules. Absent on hand-built test worlds. */
   physics?: {
     gravity: number;
     damping: number;
@@ -129,28 +107,21 @@ export interface WorldState {
   };
 }
 
-/** A recovery hint attached to a tool result. It is a fact plus a useful next move. */
 export interface ActionHint {
   code: string;
   message: string;
-  /** Tool name that can make progress, when there is one obvious next step. */
   next?: string;
 }
 
-/** Model-facing world context. It deliberately omits terrain functions and render details. */
 export interface WorldInfo {
-  /** Seconds advanced by the local spider simulation. */
-  simulationTime: number;
   clock: {
-    /** Client-local calendar date, YYYY-MM-DD. */
     localDate: string;
-    /** Client-local wall-clock time, HH:mm:ss. */
     localTime: string;
-    /** Local light phase used by the world ecology. */
     phase: LightPeriod;
-    /** Continuous local daylight in [0, 1]. */
     daylight: number;
   };
+  lamp: boolean;
+  view: number;
 }
 
 export interface SeenEntity {
@@ -160,13 +131,9 @@ export interface SeenEntity {
   y: number;
   z: number;
   stage: number;
-  /** Qualities you can act on, such as edible or carryable. */
   properties: readonly string[];
-  /** Horizontal units from you. */
   distance: number;
-  /** Degrees relative to your heading, clockwise positive. */
   bearing: number;
-  /** Close enough to act on, and not behind a solid. */
   inReach: boolean;
 }
 
@@ -177,72 +144,45 @@ export interface Carried {
   properties: readonly string[];
 }
 
-/**
- * Something within reach that can be eaten or carried.
- * Absolute position stays on a full look; this is enough to act.
- */
 export interface NearEntity {
   id: string;
   kind: string;
   stage: number;
   properties: readonly string[];
-  /** Horizontal units from you. */
   distance: number;
-  /** Degrees relative to your heading, clockwise positive. */
   bearing: number;
 }
 
 export interface Observation {
   time: number;
-  /** How far this look actually reached. */
   view: number;
-  /** Left out because they sit past view. */
   beyond: number;
-  /** Within view, but a wall or the ground stands between you and them. */
   hidden: number;
-  /** The part of `hidden` caused by a wall. */
   hiddenByWall: number;
-  /** The part of `hidden` caused by a rise in the ground. */
   hiddenByGround: number;
   self: {
     x: number;
-    /** Your height. */
     y: number;
     z: number;
-    /** Height of the ground under you. */
     ground: number;
-    /** Degrees. 0 is world -Z, clockwise positive. */
     heading: number;
-    /** How far you are lifted off the ground. */
     height: number;
     speed: number;
-    /** grass while you are standing in it. */
     cover: 'grass' | null;
-    /** True while you are inside the nest. */
     home: boolean;
-    /** True while any water sits under the body. */
     wet: boolean;
-    /** How deep the water is under the body. Zero on dry ground. */
     waterDepth: number;
-    /** True when the water is deep enough to float instead of wade. */
     swimming: boolean;
-    /** Nearest water within a few meters of the body. */
     water: WaterSpot | null;
-    /** Nearest dry ground, when the body is in water. */
     shore: ShoreSpot | null;
-    /** What is on your back, oldest first. Empty when you carry nothing. */
     carrying: Carried[];
-    /** What your heading runs into within the next stretch. */
     ahead: Ahead;
-    /** Solids within a few meters, nearest first. */
     nearby: NearbySolid[];
-    /** Computed sentences: which relative turn is walkable, and for how far. */
-    ways: string[];
+    ways: Waypoint[];
   };
   entities: SeenEntity[];
 }
 
-/** The body's own state, without the island around it. */
 export type Sense = Pick<
   Observation['self'],
   | 'x'
@@ -262,11 +202,9 @@ export type Sense = Pick<
   | 'carrying'
   | 'ahead'
 > & {
-  /** Present when the outcome was blocked, steep, or no-path. */
-  ways?: string[];
+  ways?: Waypoint[];
 };
 
-/** Compass-style degrees from a three.js yaw. */
 export function toHeading(yaw: number): number {
   return wrapDegrees((-yaw * 180) / Math.PI);
 }
@@ -276,26 +214,19 @@ export function wrapDegrees(degrees: number): number {
   return wrapped === -180 ? 180 : wrapped;
 }
 
-/** Split the difference for the wire: three places, a number, no string. */
 function round3(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
-/** Degrees off the heading. 0 is straight ahead, clockwise positive. */
 function bearingFrom(dx: number, dz: number, heading: number): number {
   if (dx === 0 && dz === 0) return 0;
   return Math.round(wrapDegrees((Math.atan2(dx, -dz) * 180) / Math.PI - heading) * 10) / 10;
 }
 
-/** Cover and home are already on the body. Anything else can be acted on. */
 function canAct(kind: string): boolean {
   return propertiesOf(kind).some((property) => property !== 'cover' && property !== 'home');
 }
 
-/**
- * The body alone. One heading probe. `withWays` also scans 24 headings for
- * turn sentences, which a blocked action attaches so the next turn needs no observe.
- */
 export function toSense(state: SpiderState, world: WorldState, withWays = false): Sense {
   const heading = toHeading(state.yaw);
   const px = state.position.x;
@@ -471,10 +402,6 @@ export function toObservation(
   };
 }
 
-/**
- * What you can eat or carry without another look. Nearest first.
- * Grass and the nest stay off the list. An empty list means nothing in reach.
- */
 export function toNear(
   state: SpiderState,
   world: WorldState,

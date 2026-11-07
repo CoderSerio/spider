@@ -1,5 +1,3 @@
-// @vitest-environment node
-
 import { describe, expect, it } from 'vitest';
 import {
   toHeading,
@@ -85,7 +83,7 @@ describe('toSense', () => {
       id: 'grass-1',
       kind: 'grass',
       x: 0,
-      y: 0,
+      y: 0.6,
       z: 0,
       stage: 0,
       footprint: { kind: 'circle', r: 2 },
@@ -108,7 +106,7 @@ describe('toSense', () => {
       id: 'grass-1',
       kind: 'grass',
       x: 0,
-      y: 0,
+      y: 0.6,
       z: 0,
       stage: 0,
       footprint: { kind: 'circle', r: 2 },
@@ -314,7 +312,7 @@ describe('toObservation', () => {
       id: 'grass-1',
       kind: 'grass',
       x: 5,
-      y: 0,
+      y: 0.6,
       z: 0,
       stage: 0,
       footprint: { kind: 'circle', r: 2 },
@@ -343,7 +341,7 @@ describe('toObservation', () => {
       id: 'grass-1',
       kind: 'grass',
       x: 0,
-      y: 0,
+      y: 0.6,
       z: 0,
       stage: 0,
       footprint: { kind: 'circle', r: 2 },

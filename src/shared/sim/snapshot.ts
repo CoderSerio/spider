@@ -1,28 +1,33 @@
+import { grassOnDryGround, grassRadius } from '../grass.js';
 import { CARRY_LIMIT, MARK_LIMIT, MARK_NAME_MAX, MARK_NOTE_MAX, MOUNTS } from '../config.js';
 import { KINDS } from '../kinds.js';
 import type { EntityState, Footprint, PlaceMark, SpiderState, WorldState } from '../state.js';
 import { blockedAt, BODY_RADIUS } from '../sight.js';
-import { APPLE_EVERY, nestBlocks, restingY } from '../world.js';
+import {
+  APPLE_EVERY,
+  GRASS,
+  TREES,
+  nestBlocks,
+  populateScenery,
+  propBlocks,
+  restingY,
+} from '../world.js';
 import { insideLand, Terrain } from '../terrain.js';
 import { waterAt } from '../water.js';
 import { bindLegWorld } from './bindWorld.js';
 import type { Spider } from './Spider.js';
 
 export const FORMAT = 3;
-export const MAX_ENTITIES = 64;
+export const MAX_ENTITIES = 160;
 export const MAX_PENDING = 4000;
 export const MAX_JSON = 64_000;
 const MAX_SPROUTS = 1_000_000;
 const MAX_TOOL = 32;
-/**
- * The island rim is 52. A planted foot and a prop set down past that rim are
- * still this spider. Farther than this is garbage, and the snapshot is dropped.
- */
 const PLACE_M = 1_000_000;
 const PLACE_Y = 1_000;
 
-/** World body. No lease and no database key. */
 export interface SimBody {
+  scenery?: 1 | 2 | 3 | 4 | 5;
   seed: number;
   appleIn: number;
   sprouts: number;
@@ -33,12 +38,10 @@ export interface SimBody {
   pending: { text: string; tool: string | null } | null;
 }
 
-/** One stored record. IndexedDB and localStorage share this shape. */
 export interface WorldRecord extends SimBody {
   id: 'current';
   format: 3;
   savedAt: number;
-  /** Local day of the write. */
   day: string;
   owner: string;
   seq: number;
@@ -59,6 +62,7 @@ export interface Restorable {
 export function captureBody(session: Restorable, pending: SimBody['pending']): SimBody {
   const world = session.world;
   return {
+    scenery: 5,
     seed: world.seed,
     appleIn: world.appleIn ?? APPLE_EVERY,
     sprouts: world.sprouts ?? 0,
@@ -79,15 +83,41 @@ export function applyBody(
   const world = session.world;
   world.terrain = terrain;
   world.seed = terrain.seed;
-  world.blocks = nestBlocks();
-  // 地形函数会改；恢复时把落地的道具重新放到当前地面上。
   world.entities = structuredClone(body.entities).map((entity) =>
     entity.kind === 'nest'
       ? entity
       : { ...entity, y: restingY(terrain, entity.kind, entity.x, entity.z, entity.footprint) },
   );
+  if (body.scenery === 2) {
+    let patches = 0;
+    world.entities = world.entities.filter(
+      (entity) => entity.kind !== 'grass' || ++patches <= GRASS,
+    );
+  }
+  if (body.scenery !== 4 && body.scenery !== 5) {
+    for (const entity of world.entities) {
+      if (entity.kind === 'grass') entity.footprint = { kind: 'circle', r: grassRadius(entity.id) };
+    }
+  }
+  if (body.scenery !== 5) {
+    let trees = 0;
+    world.entities = world.entities.filter((entity) => entity.kind !== 'tree' || ++trees <= TREES);
+  }
+  world.blocks = [...nestBlocks(), ...propBlocks(world.entities)];
   world.marks = structuredClone(body.marks);
   world.carrying = structuredClone(body.carrying);
+  if (body.scenery !== 2 && body.scenery !== 3 && body.scenery !== 4 && body.scenery !== 5)
+    populateScenery(world, body.spider.position, MAX_ENTITIES);
+  world.entities = world.entities.filter(
+    (entity) =>
+      entity.kind !== 'grass' ||
+      grassOnDryGround(
+        (x, z) => terrain.height(x, z),
+        entity.x,
+        entity.z,
+        entity.footprint?.kind === 'circle' ? entity.footprint.r : 1.7,
+      ),
+  );
   world.appleIn = body.appleIn;
   world.sprouts = body.sprouts;
   bindLegWorld(session.spider, world);
@@ -187,6 +217,13 @@ function bodyOf(raw: Record<string, unknown>): SimBody | null {
   const marks = readMarks(raw.marks);
   if (!marks) return null;
   return {
+    ...(raw.scenery === 1 ||
+    raw.scenery === 2 ||
+    raw.scenery === 3 ||
+    raw.scenery === 4 ||
+    raw.scenery === 5
+      ? { scenery: raw.scenery }
+      : {}),
     seed: raw.seed >>> 0,
     appleIn: raw.appleIn as number,
     sprouts: raw.sprouts as number,
@@ -198,7 +235,6 @@ function bodyOf(raw: Record<string, unknown>): SimBody | null {
   };
 }
 
-/** No marks is a valid old body. A present list must stay inside the limits. */
 function readMarks(value: unknown): PlaceMark[] | null {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > MARK_LIMIT) return null;
@@ -278,7 +314,6 @@ function readEntity(value: unknown): EntityState | null {
   return entity;
 }
 
-/** Identity when absent. A partial or non-finite orientation is a bad record. */
 function readSpin(
   raw: Record<string, unknown>,
 ): { qx: number; qy: number; qz: number; qw: number } | null | undefined {
@@ -293,7 +328,6 @@ function readSpin(
   return { qx, qy, qz, qw };
 }
 
-/** 缺省或有限数字；其他值是坏记录。 */
 function optionalNumber(value: unknown): number | undefined | null {
   if (value === undefined) return undefined;
   return isFiniteNumber(value) ? value : null;
@@ -331,11 +365,11 @@ function readSpider(value: unknown): SpiderState | null {
     chassisPitch: raw.chassisPitch as number,
     chassisRoll: raw.chassisRoll as number,
     headYaw: raw.headYaw as number,
+    lamp: raw.lamp === true,
     feet,
   };
 }
 
-/** `null` is no sentence. `undefined` means the field is unusable. */
 function readPending(value: unknown): SimBody['pending'] | undefined {
   if (value == null) return null;
   if (!value || typeof value !== 'object') return undefined;

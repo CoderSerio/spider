@@ -1,7 +1,6 @@
 import { createWorldHandler, type WorldHandler } from './worldHandler.js';
 import type { PreparedBuffers, WorldReply, WorldRequest } from './worldProtocol.js';
 
-/** The slice of a DedicatedWorkerGlobalScope the transport needs. */
 export interface WorldScope {
   onmessage: ((event: MessageEvent<WorldRequest>) => void) | null;
   postMessage(message: WorldReply, transfer?: Transferable[]): void;
@@ -14,9 +13,8 @@ function transfers(value: PreparedBuffers): Transferable[] {
     island.groundPosition.buffer,
     island.groundColor.buffer,
     island.groundIndex.buffer,
-    island.grid.buffer,
-    island.contourMinor.buffer,
-    island.contourMajor.buffer,
+    island.coverPosition.buffer,
+    island.coverColor.buffer,
   ];
 }
 

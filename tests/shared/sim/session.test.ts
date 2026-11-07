@@ -1,15 +1,15 @@
-// @vitest-environment node
-
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { KINDS } from '../../../src/shared/kinds.js';
 import { MARK_LIMIT, MARK_NAME_MAX, MARK_NOTE_MAX } from '../../../src/shared/config.js';
 import { STUCK_LIMIT, type Goal } from '../../../src/shared/sim/goals.js';
+import { visualRange, worldClock } from '../../../src/shared/ecology.js';
 import { SimSession } from '../../../src/shared/sim/session.js';
 import { insideHome } from '../../../src/shared/sight.js';
 import { Terrain } from '../../../src/shared/terrain.js';
 import type { EntityState } from '../../../src/shared/state.js';
 import type { Controls } from '../../../src/shared/types.js';
 import { block } from '../../helpers.js';
+import { drive } from '../../simHelpers.js';
 
 const routeControl = vi.hoisted(() => ({
   plan: null as null | ((...args: unknown[]) => unknown),
@@ -32,7 +32,6 @@ function fakeEntity(over: Partial<EntityState> = {}): EntityState {
   return { id: 'apple-99', kind: 'apple', x: 0, y: 0, z: 0, stage: 0, ...over };
 }
 
-/** Pump frames and let async goal chains make progress between rounds. */
 async function settle<T>(
   promise: Promise<T>,
   session: SimSession,
@@ -78,10 +77,9 @@ describe('SimSession basics', () => {
     expect(snapshot.state.feet).toHaveLength(8);
   });
 
-  it('reports simulation time and client-local world time', () => {
+  it('reports client-local world time', () => {
     const session = new SimSession(3);
     expect(session.worldInfo(new Date(2026, 10, 5, 12, 34, 56))).toMatchObject({
-      simulationTime: 0,
       clock: {
         localDate: '2026-11-05',
         localTime: '12:34:56',
@@ -92,6 +90,16 @@ describe('SimSession basics', () => {
       0.988,
       3,
     );
+    const noon = new Date(2026, 0, 1, 12);
+    expect(session.worldInfo(noon)).toMatchObject({ lamp: false, view: 1 });
+    session.setLamp(true);
+    const midnight = new Date(2026, 0, 1, 0);
+    expect(session.worldInfo(midnight)).toMatchObject({ lamp: true });
+    expect(session.worldInfo(midnight).view).toBeCloseTo(
+      visualRange(worldClock(midnight), true),
+      3,
+    );
+    expect(session.worldInfo(midnight).view).toBeLessThan(1);
   });
 
   it('ignores negative frame steps', () => {
@@ -145,8 +153,14 @@ describe('SimSession basics', () => {
       const session = new SimSession(3);
       session.world.entities = session.world.entities.filter((entity) => entity.kind === 'nest');
       const apple = session.addEntity('apple', 0, -0.7);
-      expect(session.observe(16).view).toBeCloseTo(8.8, 5);
+      const dark = worldClock(new Date(2026, 0, 1, 23));
+      expect(session.observe(16).view).toBeCloseTo(16 * visualRange(dark), 3);
       expect(session.near().map((item) => item.id)).toEqual([apple.id]);
+      session.setLamp(true);
+      const lit = session.observe(16).view;
+      expect(lit).toBeCloseTo(16 * visualRange(dark, true), 3);
+      expect(lit).toBeLessThan(16);
+      expect(lit).toBeGreaterThan(16 * visualRange(dark));
     } finally {
       vi.useRealTimers();
     }
@@ -160,7 +174,7 @@ describe('SimSession basics', () => {
     };
     session.spider.root.position.set(2, 0, 0);
     session.spider.yaw = -Math.PI / 2;
-    const outcome = await settle(session.drive(2, { throttle: 1 }), session);
+    const outcome = await settle(drive(session, 2, { throttle: 1 }), session);
     expect(outcome).toMatchObject({ ok: false, reason: 'blocked', halt: 'solid' });
     expect(session.spider.root.position.x).toBeLessThan(3);
   });
@@ -271,10 +285,26 @@ describe('goals', () => {
     await expect(promise).resolves.toMatchObject({ ok: false, reason: 'cancelled' });
   });
 
+  it('finishes a goal that already cancelled itself', async () => {
+    const session = new SimSession(4);
+    const goal: Goal = {
+      timeout: 10,
+      controls() {
+        session.cancel();
+        return IDLE;
+      },
+      done: () => true,
+      result: () => ({}),
+    };
+    const promise = session.run(goal);
+    session.frame(1 / 60);
+    await expect(promise).resolves.toMatchObject({ ok: false, reason: 'cancelled' });
+  });
+
   it('preempts the previous goal', async () => {
     const session = new SimSession(4);
     const first = session.walk(5);
-    const second = session.wait(0.1);
+    const second = drive(session, 0.1, {});
     await expect(first).resolves.toMatchObject({ ok: false, reason: 'cancelled' });
     await expect(settle(second, session)).resolves.toMatchObject({ ok: true });
   });
@@ -318,17 +348,17 @@ describe('goals', () => {
 
   it('drives for a fixed time and stops against a solid', async () => {
     const session = new SimSession(4);
-    await expect(settle(session.drive(0.3, { throttle: 1 }), session)).resolves.toMatchObject({
+    await expect(settle(drive(session, 0.3, { throttle: 1 }), session)).resolves.toMatchObject({
       ok: true,
     });
     session.spider.root.position.set(0, 0, 1.8);
     session.spider.yaw = Math.PI;
-    const blocked = await settle(session.drive(2, { throttle: 1 }), session);
+    const blocked = await settle(drive(session, 2, { throttle: 1 }), session);
     expect(blocked).toMatchObject({ ok: false, reason: 'blocked', halt: 'solid' });
-    await expect(settle(session.drive(0.1, { turn: 1 }), session)).resolves.toMatchObject({
+    await expect(settle(drive(session, 0.1, { turn: 1 }), session)).resolves.toMatchObject({
       ok: true,
     });
-    await expect(settle(session.wait(0.1), session)).resolves.toMatchObject({ ok: true });
+    await expect(settle(drive(session, 0.1, {}), session)).resolves.toMatchObject({ ok: true });
   });
 
   it('runs an arbitrary goal to its timeout', async () => {
@@ -479,6 +509,13 @@ describe('approach', () => {
       reason: 'already-close',
       id: apple.id,
     });
+  });
+
+  it('plans a stand-off from a fruit it is already touching', async () => {
+    const session = new SimSession(6);
+    const apple = session.addEntity('apple', 0, 0);
+    await settle(session.approach(apple.id, -0.06), session);
+    expect(session.world.entities.some((entity) => entity.id === apple.id)).toBe(true);
   });
 
   it('walks to a standoff and faces it', async () => {
@@ -854,8 +891,19 @@ describe('carrying', () => {
   it('refuses to store with no room', () => {
     const session = new SimSession(9);
     session.world.carrying.push(fakeEntity({ id: 'apple-back' }));
-    session.world.blocks.push(block('fill', 0.5, 1.8, -2.5, 1.5));
+    session.world.blocks.push(block('fill', -3, 3, -3, 3));
     expect(session.store()).toMatchObject({ ok: false, reason: 'no-room' });
+  });
+
+  it('keeps storing after the first row is full', () => {
+    const session = new SimSession(9);
+    for (let index = 0; index < 9; index += 1) {
+      session.world.carrying.push(fakeEntity({ id: `kept-${index}` }));
+      expect(session.store(`kept-${index}`).ok).toBe(true);
+    }
+    const stored = session.world.entities.filter((entity) => entity.id.startsWith('kept-'));
+    expect(stored).toHaveLength(9);
+    expect(new Set(stored.map((entity) => `${entity.x},${entity.z}`)).size).toBe(9);
   });
 
   it('stores a carried thing in the nest', () => {
@@ -928,4 +976,27 @@ describe('sleep and props', () => {
   it('keeps its own copy of the goal contract', () => {
     expect(STUCK_LIMIT).toBeGreaterThan(0);
   });
+});
+
+it('leaves slack cargo still, pulls taut cargo, and preserves existing velocity', () => {
+  const session = new SimSession(3);
+  session.world.entities = [];
+  const back = session.spider.root.position;
+  const cargo = fakeEntity({ x: back.x, z: back.z + 1.66, y: back.y + 10 });
+  session.world.carrying = [cargo];
+  session.frame(0);
+  expect(cargo.vx).toBe(0);
+  expect(cargo.vz).toBe(0);
+  session.frame(0.05);
+  expect(cargo.y).toBeLessThan(back.y + 10);
+  expect(cargo.vy).toBeLessThan(0);
+  cargo.x = back.x + 5;
+  const oldX = cargo.x;
+  session.frame(0.05);
+  expect(cargo.x).toBeLessThan(oldX);
+  expect(cargo.vx).toBeLessThan(0);
+  cargo.y = -100;
+  session.frame(0.05);
+  expect(cargo.vy).toBe(0);
+  expect(cargo.y).toBeGreaterThan(-100);
 });

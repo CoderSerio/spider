@@ -7,15 +7,12 @@ import {
   Mesh,
   Vector3,
 } from 'three';
+import { grassClumps } from '../shared/grass.js';
 import { mulberry32 } from '../shared/noise.js';
 import { grassMat, inkMat } from '../shared/sim/parts.js';
 
-// 草成堆长。旧版一片草是 64 根方条，远远看去像木栅栏；现在每片只有三四堆，
-// 每堆十几片弯叶，叶子更长、更宽，顶点总数反而更少。
-
 const TAU = Math.PI * 2;
 const UP = new Vector3(0, 1, 0);
-/** 叶片根部离地的高度，drape 时按这个值反推。 */
 const BASE_Y = 0.015;
 
 export type GrassStyle = 'thin' | 'seed' | 'broad';
@@ -52,7 +49,6 @@ function segment(out: number[], a: Vector3, b: Vector3): void {
   out.push(a.x, a.y, a.z, b.x, b.y, b.z);
 }
 
-/** 一片弯叶，返回中脉上的点，便于在叶尖接穗。 */
 function addBlade(batch: Batch, options: BladeOptions): Vector3[] {
   const { base, yaw, length, lean, droop, width, twist = 0, veins = 0, midrib = false } = options;
   const dir = new Vector3(Math.cos(yaw), 0, Math.sin(yaw));
@@ -119,7 +115,6 @@ function addBlade(batch: Batch, options: BladeOptions): Vector3[] {
   return spine;
 }
 
-/** 三次贝塞尔，只用到点和切线。 */
 class CubicBezier {
   constructor(
     readonly p0: Vector3,
@@ -147,7 +142,6 @@ class CubicBezier {
   }
 }
 
-/** 一根抽穗：细茎加两侧交替的小芒。 */
 function addHead(
   batch: Batch,
   base: Vector3,
@@ -180,24 +174,21 @@ function addHead(
   segment(batch.ink, top.clone().addScaledVector(UP, -0.2), top.clone().addScaledVector(UP, 0.02));
 }
 
-/** 一片草：三四个大小不一的草堆，叶子向上抽再弯下。 */
 export function buildGrass(radius: number, seed: number, style: GrassStyle): Group {
   const rand = mulberry32(seed);
   const batch: Batch = { paper: [], indices: [], ink: [], blades: [] };
   const broad = style === 'broad';
-  // 两堆就够一片草：岛上草片多，单堆要挤满叶子。
-  const clumps = Math.max(1, Math.min(2, Math.round(radius * 0.8)));
-  const offset = rand() * TAU;
+  const clumps = grassClumps(radius, seed);
 
-  for (let c = 0; c < clumps; c++) {
-    // 草堆沿螺旋铺开，堆与堆之间留出空地。
-    const scale = 0.8 + rand() * 1.05;
-    const angle = offset + c * 2.399963;
-    const dist = radius * 0.9 * Math.sqrt((c + 0.6) / clumps) + (rand() - 0.5) * 0.2;
-    const cx = Math.cos(angle) * dist;
-    const cz = Math.sin(angle) * dist;
-    const spread = (broad ? 0.19 : 0.15) * (0.6 + scale * 0.6);
-    const count = Math.max(10, Math.round((broad ? 10 : 12) * scale));
+  for (const clump of clumps) {
+    const scale = clump.height;
+    const cx = clump.x;
+    const cz = clump.z;
+    const spread = clump.radius * 0.62;
+    const count = Math.round((broad ? 16 : 20) * (0.7 + scale * 0.3));
+    const paperStart = batch.paper.length;
+    const inkStart = batch.ink.length;
+    const bladeStart = batch.blades.length;
 
     for (let b = 0; b < count; b++) {
       const a = rand() * TAU;
@@ -208,7 +199,7 @@ export function buildGrass(radius: number, seed: number, style: GrassStyle): Gro
         length: (broad ? 0.46 + rand() * 0.38 : 0.42 + rand() * 0.58) * (0.8 + scale * 0.5),
         lean: 0.14 + rand() * (broad ? 0.66 : 0.48) + scale * 0.08,
         droop: rand() * (broad ? 0.85 : 0.55),
-        width: broad ? 0.09 + rand() * 0.04 : 0.032 + rand() * 0.018,
+        width: broad ? 0.035 + rand() * 0.02 : 0.012 + rand() * 0.009,
         twist: (rand() - 0.5) * 1.1,
         veins: broad ? 2 : 0,
         midrib: broad,
@@ -229,11 +220,40 @@ export function buildGrass(radius: number, seed: number, style: GrassStyle): Gro
         );
       }
     }
+
+    let horizontal = 0;
+    let top = BASE_Y;
+    for (const coordinates of [batch.paper, batch.ink]) {
+      const start = coordinates === batch.paper ? paperStart : inkStart;
+      for (let i = start; i < coordinates.length; i += 3) {
+        horizontal = Math.max(horizontal, Math.hypot(coordinates[i] - cx, coordinates[i + 2] - cz));
+        top = Math.max(top, coordinates[i + 1]);
+      }
+    }
+    const horizontalScale = clump.radius / horizontal;
+    const verticalScale = clump.height / (top - BASE_Y);
+    for (const coordinates of [batch.paper, batch.ink]) {
+      const start = coordinates === batch.paper ? paperStart : inkStart;
+      for (let i = start; i < coordinates.length; i += 3) {
+        coordinates[i] = cx + (coordinates[i] - cx) * horizontalScale;
+        coordinates[i + 1] = BASE_Y + (coordinates[i + 1] - BASE_Y) * verticalScale;
+        coordinates[i + 2] = cz + (coordinates[i + 2] - cz) * horizontalScale;
+      }
+    }
+    for (let i = bladeStart; i < batch.blades.length; i++) {
+      const blade = batch.blades[i];
+      batch.blades[i] = {
+        ...blade,
+        x: cx + (blade.x - cx) * horizontalScale,
+        z: cz + (blade.z - cz) * horizontalScale,
+      };
+    }
   }
 
   const paper = new BufferGeometry();
   paper.setAttribute('position', new Float32BufferAttribute(batch.paper, 3));
   paper.setIndex(batch.indices);
+  paper.computeVertexNormals();
   const ink = new BufferGeometry();
   ink.setAttribute('position', new Float32BufferAttribute(batch.ink, 3));
   const group = new Group();
@@ -242,7 +262,6 @@ export function buildGrass(radius: number, seed: number, style: GrassStyle): Gro
   return group;
 }
 
-/** 每根草按自己脚下的地面抬起，斜坡上不会一半埋进土里。 */
 export function drapeGrass(
   group: Group,
   x: number,

@@ -1,5 +1,5 @@
-import { Euler, Group, MathUtils, Matrix4, Mesh, Vector3 } from 'three';
-import { BONES, GAIT, MOUNTS } from '../config.js';
+import { BufferGeometry, Euler, Group, MathUtils, Matrix4, Mesh, Object3D, Vector3 } from 'three';
+import { BONES, CONTACT, GAIT, MOUNTS } from '../config.js';
 import { WORLD_RADIUS } from '../terrain.js';
 import type { SpiderState } from '../state.js';
 import { IDLE_CONTROLS, type Controls } from '../types.js';
@@ -43,6 +43,7 @@ const SHELL_PHI = [-1.35, -0.9, -0.45, 0, 0.45, 0.9, 1.35];
 const SHELL_THETA = 12;
 const shellEuler = new Euler(0, 0, 0, 'XYZ');
 const shellPoint = new Vector3();
+const partWorld = new Matrix4();
 
 export class Spider {
   readonly root = new Group();
@@ -54,6 +55,8 @@ export class Spider {
   yaw = 0;
   yawRate = 0;
   headYaw = 0;
+  /** The spider turns this on. The sun does not. */
+  lamp = false;
   heightSet = 0;
   speed = 0;
   time = 0;
@@ -63,6 +66,8 @@ export class Spider {
   stuckFor = 0;
   /** Why the last step failed to move. `clear` means it moved, or nothing was asked. */
   halt: 'clear' | 'solid' | 'steep' = 'clear';
+  /** Temporary reach posture used while handling a nearby object. */
+  interaction: { target: Vector3; phase: 'reach' | 'drag' | 'release' } | null = null;
 
   #head!: Group;
   #seeded = false;
@@ -84,6 +89,18 @@ export class Spider {
   #shellGround = 0;
   /** Loose bodies the legs must not pass through. Filled once per pose. */
   #spheres: LegSphere[] = [];
+  /** Last inputs that produced the current leg pose. Idle frames reuse it. */
+  #held: {
+    x: number;
+    y: number;
+    z: number;
+    yaw: number;
+    pitch: number;
+    roll: number;
+    deck: number;
+    feet: number[];
+    spheres: number[];
+  } | null = null;
   #fillLegs: (into: LegSphere[]) => void = (into) => {
     into.length = 0;
   };
@@ -150,7 +167,7 @@ export class Spider {
     if (!this.#seeded) this.#seedFeet();
 
     if (dt <= 0) {
-      this.#pose();
+      this.#pose(true);
       return;
     }
 
@@ -175,7 +192,33 @@ export class Spider {
 
     this.#stepGait(dt, throttle, turn, boost);
     this.#applySlope();
-    this.#pose();
+    this.#applyInteraction();
+    // A moving body never reuses the last pose, so don't spend the frame recording one.
+    const reuse =
+      Math.abs(throttle) < 0.05 &&
+      Math.abs(turn) < 0.5 &&
+      Math.abs(this.speed) < 0.05 &&
+      Math.abs(this.yawRate) < 0.25;
+    this.#pose(reuse);
+  }
+
+  setInteraction(
+    target: { x: number; y?: number; z: number } | null,
+    phase: 'reach' | 'drag' | 'release' = 'reach',
+  ): void {
+    this.interaction = target
+      ? { target: new Vector3(target.x, target.y ?? 0.2, target.z), phase }
+      : null;
+  }
+
+  #applyInteraction(): void {
+    const action = this.interaction;
+    if (!action) return;
+    // 保持正常步态，只把身体轻轻压低。把四只前腿瞬间钉到目标点会
+    // 让蜘蛛像失去生命一样僵住；前腿应继续由步态求解器自然摆动。
+    const crouch = action.phase === 'release' ? 0.45 : 1;
+    this.chassis.position.y = -0.045 * crouch;
+    this.chassis.rotation.x = 0.045 * crouch;
   }
 
   /** Snapshot for the wire: everything a viewer needs to rebuild the pose. */
@@ -189,6 +232,7 @@ export class Spider {
       chassisPitch: this.chassis.rotation.x,
       chassisRoll: this.chassis.rotation.z,
       headYaw: this.headYaw,
+      lamp: this.lamp,
       feet: this.legs.map((leg) => ({ x: leg.foot.x, y: leg.foot.y, z: leg.foot.z })),
     };
   }
@@ -204,11 +248,12 @@ export class Spider {
     this.chassis.rotation.x = state.chassisPitch;
     this.chassis.rotation.z = state.chassisRoll;
     this.#head.rotation.y = state.headYaw;
+    this.lamp = state.lamp === true;
     for (let i = 0; i < this.legs.length; i++) {
       const foot = state.feet[i];
       this.legs[i].foot.set(foot.x, foot.y, foot.z);
     }
-    this.#pose();
+    this.#pose(true);
   }
 
   /** Put a saved pose back and stop. The saved speed is not resumed. */
@@ -230,7 +275,7 @@ export class Spider {
     this.#stepping = false;
     this.#stillFor = 0;
     this.chassis.position.y = 0;
-    this.#pose();
+    this.#pose(true);
   }
 
   #buildBody(): Mesh[] {
@@ -329,7 +374,10 @@ export class Spider {
     // Buoyancy is softer than the leg lift on land, so entering water settles
     // instead of snapping onto a hard plane.
     const ease = this.#swimming ? WATER.buoyancyEase : GAIT.liftEase;
-    this.root.position.y += (support - this.root.position.y) * Math.min(1, ease * dt);
+    const follow = (support - this.root.position.y) * Math.min(1, ease * dt);
+    // Snap the last fraction so a standing body stops changing and can reuse its pose.
+    if (Math.abs(follow) < 1e-4) this.root.position.y = support;
+    else this.root.position.y += follow;
   }
 
   /** The ground, or the buoyant water line when the hollow is deep enough. */
@@ -386,8 +434,8 @@ export class Spider {
     this.#shellX = x;
     this.#shellZ = z;
     this.#shellYaw = this.yaw;
-    // A hair of pad so the ink shell does not z-fight a face between samples.
-    this.#shellGround = center + (lift > 0 ? lift + 0.04 : 0);
+    // The shared contact skin, so a slope does not grow its own hover.
+    this.#shellGround = center + (lift > 0 ? lift + CONTACT : 0);
     return this.#shellGround;
   }
 
@@ -496,20 +544,123 @@ export class Spider {
     const y = airborne
       ? this.root.position.y
       : supportY(out.x, out.z, this.#ground, this.#mound, this.#spheres);
-    out.y = y + GAIT.footY;
+    out.y = y + CONTACT;
   }
 
   #refreshLegs(): void {
     this.#fillLegs(this.#spheres);
   }
 
-  #pose(): void {
+  #pose(reuse: boolean): void {
     this.#refreshLegs();
+    if (reuse && this.#poseHeld()) return;
     this.root.updateMatrixWorld(true);
     for (const leg of this.legs) this.#poseLeg(leg);
+    if (reuse) this.#holdPose();
+    else this.#held = null;
+  }
+
+  /** True when the body, feet, and nearby loose bodies match the pose already drawn. */
+  #poseHeld(): boolean {
+    const held = this.#held;
+    if (!held) return false;
+    if (
+      held.x !== this.root.position.x ||
+      held.y !== this.root.position.y ||
+      held.z !== this.root.position.z ||
+      held.yaw !== this.yaw ||
+      held.pitch !== this.chassis.rotation.x ||
+      held.roll !== this.chassis.rotation.z ||
+      held.deck !== this.chassis.position.y
+    ) {
+      return false;
+    }
+    const feet = held.feet;
+    for (let i = 0; i < this.legs.length; i++) {
+      const foot = this.legs[i].foot;
+      const offset = i * 3;
+      if (feet[offset] !== foot.x || feet[offset + 1] !== foot.y || feet[offset + 2] !== foot.z) {
+        return false;
+      }
+    }
+    const spheres = this.#spheres;
+    const stamp = held.spheres;
+    if (stamp.length !== spheres.length * 4) return false;
+    for (let i = 0; i < spheres.length; i++) {
+      const sphere = spheres[i];
+      const offset = i * 4;
+      if (
+        stamp[offset] !== sphere.x ||
+        stamp[offset + 1] !== sphere.y ||
+        stamp[offset + 2] !== sphere.z ||
+        stamp[offset + 3] !== sphere.radius
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  #holdPose(): void {
+    const held = (this.#held ??= {
+      x: 0,
+      y: 0,
+      z: 0,
+      yaw: 0,
+      pitch: 0,
+      roll: 0,
+      deck: 0,
+      feet: [],
+      spheres: [],
+    });
+    held.x = this.root.position.x;
+    held.y = this.root.position.y;
+    held.z = this.root.position.z;
+    held.yaw = this.yaw;
+    held.pitch = this.chassis.rotation.x;
+    held.roll = this.chassis.rotation.z;
+    held.deck = this.chassis.position.y;
+    const feet = held.feet;
+    feet.length = this.legs.length * 3;
+    for (let i = 0; i < this.legs.length; i++) {
+      const foot = this.legs[i].foot;
+      const offset = i * 3;
+      feet[offset] = foot.x;
+      feet[offset + 1] = foot.y;
+      feet[offset + 2] = foot.z;
+    }
+    const stamp = held.spheres;
+    const spheres = this.#spheres;
+    stamp.length = spheres.length * 4;
+    for (let i = 0; i < spheres.length; i++) {
+      const sphere = spheres[i];
+      const offset = i * 4;
+      stamp[offset] = sphere.x;
+      stamp[offset + 1] = sphere.y;
+      stamp[offset + 2] = sphere.z;
+      stamp[offset + 3] = sphere.radius;
+    }
   }
 
   #poseLeg(leg: Leg): void {
+    // The claw is parented to the tarsus, so its tip is not straight under the
+    // anchor. Raise the planted foot until the posed claw meets the skin.
+    this.#solveAndPlace(leg);
+    const parts = footParts(leg);
+    for (let pass = 0; pass < 2; pass++) {
+      const floor =
+        supportY(leg.foot.x, leg.foot.z, this.#ground, this.#mound, this.#spheres) + CONTACT;
+      const low = Math.min(
+        partLowest(leg.claw, parts.claw),
+        partLowest(leg.bones[3], parts.tarsus),
+      );
+      if (low >= floor - 1e-4) break;
+      leg.foot.y += floor - low;
+      this.#solveAndPlace(leg);
+    }
+  }
+
+  #solveAndPlace(leg: Leg): void {
     shoulderW.setFromMatrixPosition(leg.mount.matrixWorld);
     solveLeg(
       shoulderW,
@@ -533,6 +684,69 @@ export class Spider {
     leg.claw.position.copy(chain[4]);
     leg.claw.quaternion.copy(leg.bones[3].quaternion);
   }
+}
+
+/**
+ * One drawn geometry, in the space of the claw group or the tarsus group.
+ * Baked once: walking these meshes on every planted foot blew the frame budget
+ * once coverage instrumentation was on.
+ */
+type FootPart = {
+  local: Matrix4;
+  cx: number;
+  cy: number;
+  cz: number;
+  hx: number;
+  hy: number;
+  hz: number;
+};
+
+let bakedFeet: { claw: FootPart[]; tarsus: FootPart[] } | undefined;
+
+function footParts(leg: Leg): { claw: FootPart[]; tarsus: FootPart[] } {
+  bakedFeet ??= { claw: collectParts(leg.claw), tarsus: collectParts(leg.bones[3]) };
+  return bakedFeet;
+}
+
+function collectParts(root: Object3D): FootPart[] {
+  root.updateWorldMatrix(true, true);
+  const inv = new Matrix4().copy(root.matrixWorld).invert();
+  const parts: FootPart[] = [];
+  root.traverse((node) => {
+    const geometry = (node as Mesh).geometry as BufferGeometry | undefined;
+    if (!geometry) return;
+    geometry.computeBoundingBox();
+    // computeBoundingBox always assigns the box, including an empty one.
+    const box = geometry.boundingBox!;
+    parts.push({
+      local: new Matrix4().multiplyMatrices(inv, node.matrixWorld),
+      cx: (box.min.x + box.max.x) * 0.5,
+      cy: (box.min.y + box.max.y) * 0.5,
+      cz: (box.min.z + box.max.z) * 0.5,
+      hx: (box.max.x - box.min.x) * 0.5,
+      hy: (box.max.y - box.min.y) * 0.5,
+      hz: (box.max.z - box.min.z) * 0.5,
+    });
+  });
+  return parts;
+}
+
+/** Lowest world Y of baked part boxes. The oriented box matches the old 8-corner walk. */
+function partLowest(object: Object3D, parts: readonly FootPart[]): number {
+  object.updateWorldMatrix(true, false);
+  let lowest = Infinity;
+  for (const part of parts) {
+    partWorld.multiplyMatrices(object.matrixWorld, part.local);
+    lowest = Math.min(lowest, orientedMinY(partWorld, part));
+  }
+  return lowest;
+}
+
+function orientedMinY(matrix: Matrix4, part: FootPart): number {
+  const e = matrix.elements;
+  const worldY = e[1] * part.cx + e[5] * part.cy + e[9] * part.cz + e[13];
+  const half = Math.abs(e[1]) * part.hx + Math.abs(e[5]) * part.hy + Math.abs(e[9]) * part.hz;
+  return worldY - half;
 }
 
 /** Keep a step inside the round island instead of the old square corners. */

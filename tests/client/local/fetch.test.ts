@@ -29,20 +29,20 @@ it('routes to the selected worker without touching network fetch', async () => {
 });
 it('turns tool results into chat messages and supplies executable tool schemas', () => {
   const messages = localMessages({
-    tools: [{ name: 'walk' }],
+    tools: [{ name: 'go' }],
     messages: [
       { role: 'system', content: 'ignored full prompt' },
       { role: 'user', content: '走一步' },
       {
         role: 'assistant',
-        tool_calls: [{ function: { name: 'walk', arguments: '{"distance":1}' } }],
+        tool_calls: [{ function: { name: 'go', arguments: '{"mode":"degrees","degrees":90}' } }],
       },
       { role: 'tool', content: '{"ok":true}' },
       { role: 'assistant', content: null },
     ],
   });
-  expect(messages[0].content).toContain('distance');
-  expect(messages[2].content).toContain('"name":"walk"');
+  expect(messages[0].content).toContain('degrees');
+  expect(messages[2].content).toContain('"name":"go"');
   expect(messages[3]).toEqual({ role: 'user', content: '工具执行结果：{"ok":true}' });
   expect(messages[4].content).toBe('');
   expect(() => localMessages({ messages: [{ role: 'user', content: 'x'.repeat(10001) }] })).toThrow(

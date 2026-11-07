@@ -1,16 +1,11 @@
 import { Quaternion, Vector3 } from 'three';
-import { PHYSICS } from '../config.js';
+import { groundSupport } from '../contact.js';
+import { CONTACT, PHYSICS } from '../config.js';
 import { kindOf } from '../kinds.js';
 import { BODY_RADIUS, blockedAt } from '../sight.js';
 import { insideLand } from '../terrain.js';
 import { sphereVolume, submergedFraction, WATER, waterAt } from '../water.js';
 import type { EntityState, WorldState } from '../state.js';
-
-// 松散的东西共用这一套：顺坡加速、被身体顶开、彼此挤开，碰到实体就停。
-// 谁会动，写在这种东西自己的 physics.loose 上，不在这里点名。
-//
-// 竖直方向不按物体种类写死：每个 mover 都有质量、体积和碰撞球。水给出
-// 排开体积的浮力，重力给出重量，两者相加得到加速度；水阻力按浸没比例缩放。
 
 export interface Body {
   readonly x: number;
@@ -19,8 +14,11 @@ export interface Body {
 }
 
 const EPS = 0.6;
-const CLEARANCE = 0.08;
 const MAX_FALL = 12;
+
+function floorAt(world: WorldState, x: number, z: number, radius: number): number {
+  return groundSupport((px, pz) => world.terrain.height(px, pz), x, z, radius);
+}
 
 interface Mover {
   entity: EntityState;
@@ -32,17 +30,18 @@ interface Mover {
   vy: number;
   vz: number;
   slope: number;
+  floor: number;
   x0: number;
   z0: number;
-  /** 这一步开始做竖直积分时的高度。落点被接住时用来丢掉下落速度。 */
   y0: number;
+  asleep: boolean;
 }
 
 const spinQ = new Quaternion();
 const spinDelta = new Quaternion();
 const spinAxis = new Vector3();
+const asleepBodies = new WeakSet<EntityState>();
 
-/** Contact radius, mass, and volume of a loose body. Fixed kinds stay out. */
 function looseOf(entity: EntityState): {
   radius: number;
   rolls: boolean;
@@ -60,11 +59,9 @@ function looseOf(entity: EntityState): {
   };
 }
 
-/** Turn a round body by the arc length of this step, around the axis across its travel. */
 function roll(entity: EntityState, radius: number, dx: number, dz: number): void {
   const dist = Math.hypot(dx, dz);
   if (dist < 1e-8 || radius <= 0) return;
-  // Up × travel. Positive travel on +X spins so the bottom kicks backward.
   spinAxis.set(dz / dist, 0, -dx / dist);
   spinDelta.setFromAxisAngle(spinAxis, dist / radius);
   spinQ.set(entity.qx ?? 0, entity.qy ?? 0, entity.qz ?? 0, entity.qw ?? 1);
@@ -78,37 +75,50 @@ function roll(entity: EntityState, radius: number, dx: number, dz: number): void
 export function stepPhysics(world: WorldState, body: Body, dt: number): void {
   if (dt <= 0) return;
   const rules = world.physics ?? PHYSICS;
+  const resting = Math.abs(body.speed) < 0.05;
   const movers: Mover[] = [];
   for (const entity of world.entities) {
     const loose = looseOf(entity);
     if (!loose) continue;
+    const vx = entity.vx ?? 0;
+    const vy = entity.vy ?? 0;
+    const vz = entity.vz ?? 0;
+    const dx = entity.x - body.x;
+    const dz = entity.z - body.z;
+    const reach = BODY_RADIUS + loose.radius;
+    const asleep =
+      resting &&
+      asleepBodies.has(entity) &&
+      vx === 0 &&
+      vy === 0 &&
+      vz === 0 &&
+      dx * dx + dz * dz >= reach * reach;
     movers.push({
       entity,
       radius: loose.radius,
       rolls: loose.rolls,
       mass: Math.max(1e-9, loose.mass),
       volume: Math.max(0, loose.volume),
-      vx: entity.vx ?? 0,
-      vy: entity.vy ?? 0,
-      vz: entity.vz ?? 0,
+      vx,
+      vy,
+      vz,
       slope: 0,
+      floor: 0,
       x0: entity.x,
       z0: entity.z,
       y0: entity.y,
+      asleep,
     });
   }
   if (movers.length === 0) return;
 
   for (const mover of movers) {
+    if (mover.asleep) continue;
     const { entity, radius, mass, volume } = mover;
     let { vx, vy, vz } = mover;
-    const ground = world.terrain.height(entity.x, entity.z);
     const water = waterAt(world.terrain, entity.x, entity.z);
     const fraction = submergedFraction(entity.y, water.surface, radius);
-    // How much of the body's weight the water carries: >1 means it is pushed up.
     const buoyancy = (fraction * WATER.density * volume) / mass;
-    const grounded = entity.y <= ground + CLEARANCE + 1e-4;
-    const floating = fraction > 0 && !grounded;
     const gx =
       (world.terrain.height(entity.x + EPS, entity.z) -
         world.terrain.height(entity.x - EPS, entity.z)) /
@@ -117,13 +127,15 @@ export function stepPhysics(world: WorldState, body: Body, dt: number): void {
       (world.terrain.height(entity.x, entity.z + EPS) -
         world.terrain.height(entity.x, entity.z - EPS)) /
       (2 * EPS);
+    const ground = world.terrain.height(entity.x, entity.z);
+    const floor =
+      radius <= 0 ? ground : ground + radius * (Math.sqrt(1 + gx * gx + gz * gz) - 1) + CONTACT;
+    mover.floor = floor;
+    const grounded = entity.y <= floor + 1e-4;
+    const floating = fraction > 0 && !grounded;
     const slope = Math.hypot(gx, gz);
     mover.slope = floating ? 0 : slope;
-    // A body held by the water no longer follows the slope. A body still on the
-    // bottom keeps only the part of gravity that buoyancy has not cancelled.
     const downhill = grounded ? rules.gravity * Math.max(0, 1 - buoyancy) : 0;
-    // A steep face keeps accelerating a slow body. Zeroing that first shove
-    // used to cancel the slope, so a gentle hill never got a body moving.
     if ((!floating && slope > rules.sleepSlope) || Math.hypot(vx, vz) >= rules.sleepSpeed) {
       vx -= gx * downhill * dt;
       vz -= gz * downhill * dt;
@@ -146,7 +158,6 @@ export function stepPhysics(world: WorldState, body: Body, dt: number): void {
       }
     }
 
-    // The spider shoves a loose body out. A wall on that side wins.
     const dx = entity.x - body.x;
     const dz = entity.z - body.z;
     const distance = Math.hypot(dx, dz);
@@ -172,9 +183,8 @@ export function stepPhysics(world: WorldState, body: Body, dt: number): void {
     entity.vz = vz;
   }
 
-  // Gravity and buoyancy own the vertical axis. Contacts run after, so a body
-  // that has landed can still be lifted onto another body.
   for (const mover of movers) {
+    if (mover.asleep) continue;
     if (!insideLand(world.terrain, mover.entity.x, mover.entity.z, mover.radius)) {
       mover.entity.x = mover.x0;
       mover.entity.z = mover.z0;
@@ -184,7 +194,6 @@ export function stepPhysics(world: WorldState, body: Body, dt: number): void {
     }
     const entity = mover.entity;
     mover.y0 = entity.y;
-    const ground = world.terrain.height(entity.x, entity.z);
     const water = waterAt(world.terrain, entity.x, entity.z);
     const fraction = submergedFraction(entity.y, water.surface, mover.radius);
     const buoyancy = (fraction * WATER.density * mover.volume) / mover.mass;
@@ -192,7 +201,12 @@ export function stepPhysics(world: WorldState, body: Body, dt: number): void {
     vy *= Math.exp(-WATER.drag * fraction * dt);
     vy = Math.max(-MAX_FALL, Math.min(MAX_FALL, vy));
     let y = entity.y + vy * dt;
-    const floor = ground + CLEARANCE;
+    let floor = mover.floor;
+    const slid = (entity.x - mover.x0) ** 2 + (entity.z - mover.z0) ** 2 > 0;
+    if (slid) {
+      floor = floorAt(world, entity.x, entity.z, mover.radius);
+      mover.floor = floor;
+    }
     if (y <= floor) {
       y = floor;
       if (vy < 0) vy = 0;
@@ -202,13 +216,9 @@ export function stepPhysics(world: WorldState, body: Body, dt: number): void {
     mover.vy = vy;
   }
 
-  // 接触只改位置。叠在一起时沿三维法线分开，不再每帧加一截水平速度，
-  // 否则堆着的苹果会一直抖，也永远睡不着。
-  resolveContacts(movers, world);
+  if (movers.some((mover) => !mover.asleep)) resolveContacts(movers, world);
 
   for (const mover of movers) {
-    // 这一步没有真正下落，说明地面或别的东西把落点接住了。
-    // 留下向下的速度的话，下一步会再扎进去，堆在一起就会抖。
     if (mover.vy < 0 && mover.entity.y >= mover.y0 - 1e-4) {
       mover.vy = 0;
       mover.entity.vy = 0;
@@ -225,12 +235,22 @@ export function stepPhysics(world: WorldState, body: Body, dt: number): void {
       mover.vx = 0;
       mover.vz = 0;
     }
+    if (!resting) continue;
+    const stayed =
+      mover.entity.x === mover.x0 &&
+      mover.entity.y === mover.y0 &&
+      mover.entity.z === mover.z0 &&
+      mover.vx === 0 &&
+      mover.vy === 0 &&
+      mover.vz === 0 &&
+      mover.slope <= rules.sleepSlope;
+    if (stayed) asleepBodies.add(mover.entity);
+    else asleepBodies.delete(mover.entity);
   }
 }
 
 const CONTACT_STEPS = 6;
 
-/** 把重叠的球分开。被挡住的那一段位移交给另一只。 */
 function resolveContacts(movers: Mover[], world: WorldState): void {
   for (let step = 0; step < CONTACT_STEPS; step++) {
     let overlapped = false;
@@ -242,19 +262,16 @@ function resolveContacts(movers: Mover[], world: WorldState): void {
     if (!overlapped) break;
   }
   for (let i = 0; i < movers.length; i++) {
-    for (let j = i + 1; j < movers.length; j++) calmPair(movers[i], movers[j], world);
+    for (let j = i + 1; j < movers.length; j++) calmPair(movers[i], movers[j]);
   }
 }
 
-/** 法线比这更陡，就是一只歇在另一只上面，不是并排挤开。 */
 const SUPPORT = 0.45;
 
 function separatePair(a: Mover, b: Mover, world: WorldState): boolean {
   const normal = contactNormal(a, b);
   if (!normal) return false;
   let { nx, ny, nz, depth } = normal;
-  // 叠在一起时只沿竖直方向分开。斜着推会把上面那只慢慢挪走。
-  // 球已经重叠时，竖直间距一定小于 needed，所以 depth 为正。
   if (Math.abs(ny) >= SUPPORT) {
     const horizontal = Math.hypot(b.entity.x - a.entity.x, b.entity.z - a.entity.z);
     const min = a.radius + b.radius;
@@ -285,8 +302,7 @@ function separatePair(a: Mover, b: Mover, world: WorldState): boolean {
   return true;
 }
 
-/** 消掉仍在相互靠近的速度。已经分开或贴着不动的，不再加一截速度。 */
-function calmPair(a: Mover, b: Mover, world: WorldState): void {
+function calmPair(a: Mover, b: Mover): void {
   const normal = contactNormal(a, b, 1e-4);
   if (!normal) return;
   let { nx, ny, nz } = normal;
@@ -308,9 +324,8 @@ function calmPair(a: Mover, b: Mover, world: WorldState): void {
   }
   let invA = 1 / a.mass;
   let invB = 1 / b.mass;
-  // 地面已经接住了这一只。它不该再分走一半下落速度，然后又交回去。
-  if (ny > 0 && onGround(a, world)) invA = 0;
-  if (ny < 0 && onGround(b, world)) invB = 0;
+  if (ny > 0 && onGround(a)) invA = 0;
+  if (ny < 0 && onGround(b)) invB = 0;
   const inv = invA + invB;
   const impulse = -rel / inv;
   a.vx -= nx * impulse * invA;
@@ -323,8 +338,8 @@ function calmPair(a: Mover, b: Mover, world: WorldState): void {
   syncVelocity(b);
 }
 
-function onGround(mover: Mover, world: WorldState): boolean {
-  return mover.entity.y <= world.terrain.height(mover.entity.x, mover.entity.z) + CLEARANCE + 1e-4;
+function onGround(mover: Mover): boolean {
+  return mover.entity.y <= mover.floor + 1e-4;
 }
 
 function syncVelocity(mover: Mover): void {
@@ -341,9 +356,12 @@ function contactNormal(
   const dx = b.entity.x - a.entity.x;
   const dy = b.entity.y + b.radius - (a.entity.y + a.radius);
   const dz = b.entity.z - a.entity.z;
-  const dist = Math.hypot(dx, dy, dz);
   const min = a.radius + b.radius;
-  if (dist >= min + slop) return null;
+  const reach = min + slop;
+  if (Math.abs(dx) >= reach || Math.abs(dy) >= reach || Math.abs(dz) >= reach) return null;
+  const squared = dx * dx + dy * dy + dz * dz;
+  if (squared >= reach * reach) return null;
+  const dist = Math.sqrt(squared);
   if (dist < 1e-8) return { nx: 1, ny: 0, nz: 0, depth: min - dist };
   return { nx: dx / dist, ny: dy / dist, nz: dz / dist, depth: min - dist };
 }
@@ -374,7 +392,8 @@ function moveBy(
     }
   }
   const nextY = entity.y + dy;
-  const floor = world.terrain.height(x, z) + CLEARANCE;
+  const floor = floorAt(world, x, z, mover.radius);
+  mover.floor = floor;
   let y = nextY;
   let appliedY = dy;
   if (nextY < floor) {

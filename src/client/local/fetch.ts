@@ -33,7 +33,7 @@ export function localMessages(body: RequestBody): LocalMessage[] {
     .map((m) => m.content)
     .join('\n');
   const instruction = body.tools?.length
-    ? '你是一只蜘蛛。按用户要求调用工具。需要行动时只输出一个 JSON：{"name":"工具名","arguments":{参数}}。arguments 必须包含 description 和工具要求的全部参数。例：前进一米 → {"name":"walk","arguments":{"description":"我往前走一步","distance":1}}。执行成功后用简短中文回答，不重复调用。只会观察、直走、转向和升降；不能拿取物品。工具结果是事实，失败时按 hint 恢复。可用工具：' +
+    ? '你是一只蜘蛛。按用户要求调用工具。需要行动时只输出一个 JSON：{"name":"工具名","arguments":{参数}}。arguments 必须包含 description 和工具要求的全部参数。例：右转九十度 → {"name":"go","arguments":{"description":"我向右转","mode":"degrees","degrees":90}}。移动前先 observe 获取当前位置和朝向，再用 go 的 point 模式走到目标坐标。执行成功后用简短中文回答，不重复调用。只会观察、移动、转向和升降；不能拿取物品。工具结果是事实，失败时按 hint 恢复。可用工具：' +
       JSON.stringify(body.tools)
     : system;
   // Keep the current instruction and its tool results together. Earlier turns

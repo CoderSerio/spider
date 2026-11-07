@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BufferGeometry, Group } from 'three';
+import { KINDS } from '../../src/shared/kinds.js';
 import { Spider as RealSpider } from '../../src/shared/sim/Spider.js';
 import type { EntityState, WorldState } from '../../src/shared/state.js';
 import { Stage } from '../../src/client/stage.js';
@@ -27,9 +28,9 @@ interface FakeRenderer {
   dispose: ReturnType<typeof vi.fn>;
 }
 
-vi.mock('three', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('three')>();
-  class WebGLRenderer implements FakeRenderer {
+vi.mock('three/webgpu', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('three/webgpu')>();
+  class WebGPURenderer implements FakeRenderer {
     domElement = document.createElement('canvas');
     loop: ((time: number) => void) | null = null;
     shadowMap = { enabled: false, type: 0 };
@@ -72,7 +73,7 @@ vi.mock('three', async (importOriginal) => {
       threeControl.renderers.push(this);
     }
   }
-  return { ...actual, WebGLRenderer };
+  return { ...actual, WebGPURenderer };
 });
 
 const sound = {
@@ -129,6 +130,27 @@ beforeEach(() => {
 });
 
 describe('Stage setup', () => {
+  it('shows the pack at night only while the spider leaves the lamp on', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 0, 1, 23));
+    try {
+      const spider = new RealSpider();
+      const stage = new Stage(makeHost(), spider);
+      const pack = spider.chassis.getObjectByName('headlamp');
+      expect(pack?.visible).toBe(false);
+      spider.lamp = true;
+      stage.start();
+      frame();
+      expect(pack?.visible).toBe(true);
+      spider.lamp = false;
+      frame();
+      expect(pack?.visible).toBe(false);
+      stage.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('creates the renderer, camera, and canvas', () => {
     const dispose = vi.spyOn(BufferGeometry.prototype, 'dispose');
     const host = makeHost();
@@ -265,11 +287,12 @@ describe('world sync', () => {
         children: { position: { y: number } }[];
       }[];
     };
+    const radius = KINDS.apple.physics!.radius;
     const prop = scene.children.find((child) => Math.abs(child.position.x - 2) < 1e-6);
-    expect(prop?.position.y).toBeCloseTo(0.5 + 0.36);
+    expect(prop?.position.y).toBeCloseTo(0.5 + radius);
     expect(prop?.quaternion.z).toBeCloseTo(0.1);
     expect(prop?.quaternion.w).toBeCloseTo(0.995);
-    expect(prop?.children[0]?.position.y).toBeCloseTo(-0.36);
+    expect(prop?.children[0]?.position.y).toBeCloseTo(-radius);
   });
 
   it('keeps a placed island and swaps in the next one from the source', async () => {
@@ -386,7 +409,10 @@ describe('world sync', () => {
     expect(scene.children.map((child) => (child as { name: string }).name)).toContain(
       'ecology-sky',
     );
-    expect(scene.children).toHaveLength(4);
+    expect(scene.children.map((child) => (child as { name: string }).name)).toContain(
+      'water-splash',
+    );
+    expect(scene.children).toHaveLength(5);
     resolveFresh(fresh);
     await Promise.resolve();
     frame();
@@ -531,17 +557,14 @@ describe('camera input', () => {
     const heading = [...spin];
 
     canvas.dispatchEvent(new MouseEvent('pointerdown', { clientX: 400, clientY: 300 }));
-    // 往右拖：地图向右走，镜头向左让出位置。
     canvas.dispatchEvent(new MouseEvent('pointermove', { clientX: 500, clientY: 300 }));
     frame();
     settle();
     expect(at.x).toBeLessThan(start.x);
     expect(at.z).toBeCloseTo(start.z);
-    // 视角不跟着摆。
     expect(spin).toEqual(heading);
 
     const panned = { ...at };
-    // 往下拖：地图向下走，镜头往回退。
     canvas.dispatchEvent(new MouseEvent('pointermove', { clientX: 500, clientY: 400 }));
     frame();
     settle();
@@ -563,7 +586,6 @@ describe('camera input', () => {
 
     stage.setOverlook(true);
     frame();
-    // 第一帧只走一段，不会直接瞬移到 34 米高。
     expect(cameraY).toBeGreaterThan(chaseY);
     expect(cameraY).toBeLessThan(34);
 
@@ -596,7 +618,6 @@ describe('camera input', () => {
       tick += 16;
       frame(tick);
     }
-    // 焦点移到 5 米高的坡上，镜头也抬 5 米。
     expect(cameraY).toBeGreaterThan(level);
     expect(cameraY).toBeCloseTo(level + 5, 1);
   });
@@ -697,4 +718,34 @@ describe('feedback', () => {
     draw.domElement.dispatchEvent(new MouseEvent('pointerdown', { clientX: 1, clientY: 1 }));
     expect(draw.domElement.setPointerCapture).not.toHaveBeenCalled();
   });
+});
+
+it('keeps a curved luminous tether during pickup and removes it after release', () => {
+  const spider = new RealSpider();
+  const stage = new Stage(makeHost(), spider);
+  const apple = entity({ x: 3, z: 2 });
+  const world = makeWorld({ entities: [apple] });
+  stage.bind(vi.fn(), () => world);
+  stage.start();
+  spider.setInteraction(apple, 'reach');
+  frame();
+  spider.setInteraction(apple, 'drag');
+  frame();
+  const scene = renderer().render.mock.calls.at(-1)![0] as Group;
+  const tether = scene.children.find(
+    (node) =>
+      (node as unknown as { geometry?: { type: string } }).geometry?.type === 'TubeGeometry',
+  );
+  expect(tether).toBeDefined();
+  frame();
+  expect(scene.children).toContain(tether);
+  spider.setInteraction(null);
+  frame();
+  expect(scene.children).not.toContain(tether);
+  world.entities = [];
+  world.carrying = [apple];
+  apple.x = spider.root.position.x;
+  apple.z = spider.root.position.z;
+  frame();
+  expect(scene.children).toContain(tether);
 });

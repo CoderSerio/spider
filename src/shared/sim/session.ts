@@ -14,7 +14,7 @@ import {
   type WorldState,
 } from '../state.js';
 import { kindOf, propertiesOf, slicesOf } from '../kinds.js';
-import { IDLE_CONTROLS, type Controls } from '../types.js';
+import { IDLE_CONTROLS } from '../types.js';
 import {
   blockedAt,
   BODY_RADIUS,
@@ -38,16 +38,15 @@ import {
 import { insideLand, nearestWater, surfaceOf, Terrain, WORLD_RADIUS } from '../terrain.js';
 import { CARRY_LIMIT, MARK_LIMIT, MARK_NAME_MAX, MARK_NOTE_MAX } from '../config.js';
 import { waterAt } from '../water.js';
-import { heightGoal, routeGoal, STUCK_LIMIT, turnGoal, walkGoal, type Goal } from './goals.js';
+import { heightGoal, routeGoal, turnGoal, walkGoal, type Goal } from './goals.js';
 import { planRoute } from '../route.js';
 import { applyBody, type SimBody } from './snapshot.js';
 import { bindLegWorld } from './bindWorld.js';
 import { stepPhysics } from './physics.js';
 import { Spider } from './Spider.js';
 import { localDate } from '../dates.js';
-import { visualRangeMultiplier, worldClock } from '../ecology.js';
+import { visualRange, worldClock } from '../ecology.js';
 
-/** A sentence for a detour the body already took. Null when the straight walk was clear. */
 function detourNote(around: readonly string[], direct: boolean, arrived: boolean): string | null {
   if (direct && around.length === 0) return null;
   if (around.length > 0) {
@@ -67,7 +66,6 @@ export interface GoalOutcome {
   [key: string]: unknown;
 }
 
-/** A place mark with the body's current distance and bearing. */
 export interface MarkView extends PlaceMark {
   distance: number;
   bearing: number;
@@ -80,9 +78,6 @@ interface ActiveGoal {
   finish(outcome: GoalOutcome): void;
 }
 
-/**
- * Owns the simulation. The page ticks it locally; nothing else is authoritative.
- */
 export class SimSession {
   readonly spider = new Spider();
   readonly world: WorldState;
@@ -100,7 +95,6 @@ export class SimSession {
 
   #active: ActiveGoal | null = null;
 
-  /** Drop the goal that currently owns the body, if one is running. */
   cancel(): void {
     const active = this.#active;
     if (!active) return;
@@ -111,34 +105,37 @@ export class SimSession {
     return { state: this.spider.capture(), world: this.world };
   }
 
-  /** Stable world context for the model. The local clock is never persisted. */
   worldInfo(now = new Date()): WorldInfo {
     const clock = worldClock(now);
     const pad = (value: number): string => String(value).padStart(2, '0');
     return {
-      simulationTime: round3(this.spider.time),
       clock: {
         localDate: localDate(now),
         localTime: `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
         phase: clock.period,
         daylight: round3(clock.daylight),
       },
+      lamp: this.spider.lamp,
+      view: round3(visualRange(clock, this.spider.lamp)),
     };
   }
 
-  /** Load a saved island into this same world object. */
+  get lamp(): boolean {
+    return this.spider.lamp;
+  }
+
+  setLamp(on: boolean): void {
+    this.spider.lamp = on;
+  }
+
   adopt(body: SimBody): void {
     applyBody(this, body);
   }
 
-  /**
-   * Look. The distance cannot exceed the default, and grass shortens it further.
-   * There is no way to see the whole island at once.
-   */
   observe(distance = VIEW_DISTANCE): Observation {
     const asked = Math.min(VIEW_DISTANCE, Math.max(0, distance));
     const light = worldClock();
-    const lightLimit = VIEW_DISTANCE * visualRangeMultiplier(light.period);
+    const lightLimit = VIEW_DISTANCE * visualRange(light, this.spider.lamp);
     const { x, z } = this.spider.root.position;
     const ground = surfaceOf(this.world.terrain, x, z);
     const eye = ground + EYE_HEIGHT + this.spider.heightSet;
@@ -148,17 +145,14 @@ export class SimSession {
     return toObservation(this.spider.capture(), this.world, REACH, view, REACH_Y);
   }
 
-  /** Where the body is. `withWays` adds the 24-heading turn sentences. */
   sense(withWays = false): Sense {
     return toSense(this.spider.capture(), this.world, withWays);
   }
 
-  /** Actionable things in reach, nearest first. Empty when there are none. */
   near(): NearEntity[] {
     return toNear(this.spider.capture(), this.world, REACH, REACH_Y);
   }
 
-  /** Remember the place under the body. Names are unique after trimming. */
   mark(name: string, note?: string): GoalOutcome {
     const clean = name.trim();
     if (clean.length === 0) return { ok: false, reason: 'need-name' };
@@ -183,7 +177,6 @@ export class SimSession {
     };
   }
 
-  /** Every mark, nearest first, relative to where the body stands now. */
   marks(): MarkView[] {
     const { x, z } = this.spider.root.position;
     const heading = toHeading(this.spider.yaw);
@@ -203,7 +196,6 @@ export class SimSession {
       .toSorted((a, b) => a.distance - b.distance);
   }
 
-  /** Forget one named place. */
   forgetMark(name: string): GoalOutcome {
     const clean = name.trim();
     if (clean.length === 0) return { ok: false, reason: 'need-name' };
@@ -213,7 +205,6 @@ export class SimSession {
     return { ok: true, action: 'forget', name: clean };
   }
 
-  /** Walk to a named place, reusing the same routing as moveTo. */
   async goToMark(name: string, fast = false): Promise<GoalOutcome> {
     const clean = name.trim();
     if (clean.length === 0) return { ok: false, reason: 'need-name' };
@@ -222,12 +213,10 @@ export class SimSession {
     return { ...(await this.moveTo(mark.x, mark.z, fast)), name: clean };
   }
 
-  /** One visible frame. The page calls this from its render loop. */
   frame(dt: number): void {
     this.#step(Math.min(0.05, Math.max(0, dt)));
   }
 
-  /** Run a goal to completion; resolves on reach, timeout, or preemption. */
   run(goal: Goal): Promise<GoalOutcome> {
     const previous = this.#active;
     if (previous) previous.finish({ ok: false, reason: 'cancelled', ...previous.goal.result() });
@@ -238,14 +227,11 @@ export class SimSession {
         startedAt: this.spider.time,
         guard: undefined as unknown as ReturnType<typeof setTimeout>,
         finish: (outcome: GoalOutcome) => {
-          /* v8 ignore next */
           if (this.#active === active) this.#active = null;
           clearTimeout(active.guard);
           resolve(outcome);
         },
       };
-      // Wall-clock guard: if the sim is paused, sim time never reaches the
-      // goal's timeout, and the tool call would otherwise hang forever.
       active.guard = setTimeout(
         () => active.finish({ ok: false, reason: 'timeout', ...goal.result() }),
         (goal.timeout + 3) * 1000,
@@ -262,7 +248,6 @@ export class SimSession {
     return this.run(turnGoal(this.spider, degrees));
   }
 
-  /** Turn to an absolute compass heading (0 = world -Z, clockwise positive). */
   turnTo(heading: number): Promise<GoalOutcome> {
     return this.turn(wrapDegrees(heading - toHeading(this.spider.yaw)));
   }
@@ -271,31 +256,6 @@ export class SimSession {
     return this.run(heightGoal(this.spider, level));
   }
 
-  drive(seconds: number, input: Partial<Controls>): Promise<GoalOutcome> {
-    const controls: Controls = {
-      throttle: input.throttle ?? 0,
-      turn: input.turn ?? 0,
-      lift: input.lift ?? 0,
-      boost: input.boost ?? 0,
-    };
-    const startedAt = this.spider.time;
-    const held = () => Math.abs(controls.throttle) > 0.05 && this.spider.stuckFor >= STUCK_LIMIT;
-    return this.run({
-      timeout: seconds + 1,
-      controls: () => controls,
-      done: () => this.spider.time - startedAt >= seconds || held(),
-      result: () => (held() ? { seconds, halt: this.spider.halt } : { seconds }),
-    });
-  }
-
-  wait(seconds: number): Promise<GoalOutcome> {
-    return this.drive(seconds, {});
-  }
-
-  /**
-   * Go to a point. Solids and steep ground on the straight line are routed
-   * around here; the caller does not steer the detour.
-   */
   async moveTo(x: number, z: number, fast = false): Promise<GoalOutcome> {
     const limit = WORLD_RADIUS;
     const blocks = this.world.blocks;
@@ -313,8 +273,6 @@ export class SimSession {
       if (!plan) return { ok: false, reason: 'no-path', detour: detourNote(around, direct, false) };
       direct = direct && plan.direct;
       for (const id of plan.around) if (!around.includes(id)) around.push(id);
-      // Each attempt starts where the last one ended, so these stay sequential.
-      // eslint-disable-next-line no-await-in-loop
       last = await this.run(routeGoal(this.spider, plan.points, fast));
       if (last.reason === 'cancelled') return { ...last, detour: null };
       if (last.ok) return { ok: true, reason: 'reached', detour: detourNote(around, direct, true) };
@@ -322,13 +280,11 @@ export class SimSession {
     }
     return {
       ok: false,
-      /* v8 ignore next */
-      reason: last.reason ?? 'blocked',
+      reason: last.reason,
       detour: detourNote(around, direct, false),
     };
   }
 
-  /** Walk to within `standoff` of an entity, facing it. Detours stay inside moveTo. */
   async approach(id: string, standoff = REACH - 0.3, fast = false): Promise<GoalOutcome> {
     const entity = this.world.entities.find((item) => item.id === id);
     if (!entity) return { ok: false, reason: 'not-found', id, detour: null };
@@ -348,7 +304,6 @@ export class SimSession {
     return { ok: true, reason: 'already-close', id, detour: null };
   }
 
-  /** Eat something edible that is in reach, or one of the things on your back. */
   eat(id?: string): Promise<GoalOutcome> {
     const held = id ? this.world.carrying.find((item) => item.id === id) : undefined;
     let entity = held ?? this.#nearest(id, (item) => propertiesOf(item.kind).includes('edible'));
@@ -398,7 +353,6 @@ export class SimSession {
     });
   }
 
-  /** Pick up one carryable thing, until the back is full. */
   pickUp(id?: string): Promise<GoalOutcome> {
     if (this.world.carrying.length >= CARRY_LIMIT) {
       return Promise.resolve({
@@ -417,12 +371,29 @@ export class SimSession {
     if (!reach.ok) return Promise.resolve(reach);
 
     const startedAt = this.spider.time;
+    this.spider.setInteraction(entity, 'reach');
     return this.run({
-      timeout: 2,
-      controls: () => IDLE_CONTROLS,
-      done: () => this.spider.time - startedAt >= 0.7,
+      timeout: 3,
+      controls: () => {
+        const elapsed = this.spider.time - startedAt;
+        if (elapsed < 0.35) {
+          this.spider.setInteraction(entity, 'reach');
+          return IDLE_CONTROLS;
+        }
+        // 拖拽时蜘蛛背向目标施力，果子始终留在地面上，跟在腹部后方。
+        const yaw = this.spider.yaw;
+        const fx = -Math.sin(yaw);
+        const fz = -Math.cos(yaw);
+        entity.x = this.spider.root.position.x - fx * 0.62;
+        entity.z = this.spider.root.position.z - fz * 0.62;
+        entity.y = restingY(this.world.terrain, entity.kind, entity.x, entity.z, entity.footprint);
+        this.spider.setInteraction(entity, 'drag');
+        return { ...IDLE_CONTROLS, throttle: -0.28 };
+      },
+      done: () => this.spider.time - startedAt >= 1.45,
       result: () => ({ action: 'pick-up', target: entity.id }),
     }).then((outcome) => {
+      this.spider.setInteraction(null);
       if (!outcome.ok) return outcome;
       if (!this.world.entities.includes(entity))
         return { ok: false, reason: 'not-found', id: entity.id };
@@ -437,7 +408,6 @@ export class SimSession {
     });
   }
 
-  /** Drink from a pond within reach. Water is the only thing this changes. */
   drink(): GoalOutcome {
     const { x, z } = this.spider.root.position;
     const spot = nearestWater(this.world.terrain, x, z, REACH);
@@ -451,7 +421,6 @@ export class SimSession {
     };
   }
 
-  /** Put down one thing you are carrying. With no id, that is the last one you picked up. */
   drop(id?: string): GoalOutcome {
     const item = this.#carried(id);
     if (!item) return { ok: false, reason: 'not-carrying', id };
@@ -468,7 +437,6 @@ export class SimSession {
     };
   }
 
-  /** Leave one carried thing inside the nest. With no id, that is the last one you picked up. */
   store(id?: string): GoalOutcome {
     const item = this.#carried(id);
     if (!item) return { ok: false, reason: 'not-carrying', id };
@@ -487,7 +455,6 @@ export class SimSession {
     };
   }
 
-  /** Sleep in the nest. You have to be home. */
   sleep(): Promise<GoalOutcome> {
     const { x, z } = this.spider.root.position;
     if (!insideHome(x, z)) return Promise.resolve({ ok: false, reason: 'not-home' });
@@ -511,7 +478,6 @@ export class SimSession {
     });
   }
 
-  /** Drop a new prop into the world, sitting on the ground. */
   addEntity(kind: string, x: number, z: number): WorldState['entities'][number] {
     const entity = {
       id: nextPropId(this.world, kind),
@@ -532,7 +498,6 @@ export class SimSession {
     return this.turn(wrapDegrees(bearing - toHeading(this.spider.yaw)));
   }
 
-  /** A free place at `standoff` from the entity, preferring the near side, that a route can reach. */
   #standOff(entity: EntityState, standoff: number): { x: number; z: number } | null {
     const sx = this.spider.root.position.x;
     const sz = this.spider.root.position.z;
@@ -543,7 +508,6 @@ export class SimSession {
     const dx = entity.x - sx;
     const dz = entity.z - sz;
     const dist = Math.hypot(dx, dz);
-    /* v8 ignore next */
     if (dist > 1e-3) {
       const travel = Math.max(0, dist - standoff);
       const x = sx + (dx / dist) * travel;
@@ -596,7 +560,6 @@ export class SimSession {
     return { ok: true };
   }
 
-  /** The named thing on your back, or the last one picked up when id is omitted. */
   #carried(id?: string): EntityState | null {
     if (id) return this.world.carrying.find((item) => item.id === id) ?? null;
     return this.world.carrying[this.world.carrying.length - 1] ?? null;
@@ -628,12 +591,16 @@ export class SimSession {
   }
 
   #stash(): { x: number; z: number } | null {
-    for (let slot = 0; slot < 8; slot++) {
-      const x = 1.15;
-      const z = 1.15 - slot * 0.45;
-      /* v8 ignore next */
-      if (!insideHome(x, z)) break;
-      if (this.#roomAt(x, z)) return { x, z };
+    const step = 0.45;
+    const start = 1.15;
+    for (let column = 0; ; column += 1) {
+      const x = start - column * step;
+      if (!insideHome(x, 0)) break;
+      for (let row = 0; ; row += 1) {
+        const z = start - row * step;
+        if (!insideHome(x, z)) break;
+        if (this.#roomAt(x, z)) return { x, z };
+      }
     }
     return null;
   }
@@ -642,9 +609,7 @@ export class SimSession {
     item.x = x;
     item.z = z;
     item.y = restingY(this.world.terrain, item.kind, x, z, item.footprint);
-    const carried = this.world.carrying.indexOf(item);
-    /* v8 ignore next */
-    if (carried >= 0) this.world.carrying.splice(carried, 1);
+    this.world.carrying = this.world.carrying.filter((held) => held !== item);
     this.world.entities.push(item);
   }
 
@@ -663,6 +628,7 @@ export class SimSession {
 
     const active = this.#active;
     this.spider.update(dt, active ? active.goal.controls() : IDLE_CONTROLS);
+    this.#dragCarried(dt);
     stepPhysics(
       this.world,
       {
@@ -686,5 +652,37 @@ export class SimSession {
       reason: stopped ? (halt === 'steep' ? 'steep' : 'blocked') : reached ? 'reached' : 'timeout',
       ...detail,
     });
+  }
+
+  /** Move tethered cargo with spring-damper tension and gravity. */
+  #dragCarried(dt: number): void {
+    if (this.world.carrying.length === 0) return;
+    const yaw = this.spider.yaw;
+    const back = this.spider.root.position;
+    const step = Math.max(dt, 0);
+    for (let i = 0; i < this.world.carrying.length; i++) {
+      const item = this.world.carrying[i];
+      const anchorX = back.x + Math.sin(yaw) * 1.66;
+      const anchorZ = back.z + Math.cos(yaw) * 1.66;
+      const dx = anchorX - item.x;
+      const dz = anchorZ - item.z;
+      const dist = Math.hypot(dx, dz);
+      const rest = 1.2 + i * 0.45;
+      const stretch = Math.max(0, dist - rest);
+      const pull = stretch * 8;
+      item.vx = (item.vx ?? 0) + (dist > 1e-4 ? (dx / dist) * pull * step : 0);
+      item.vz = (item.vz ?? 0) + (dist > 1e-4 ? (dz / dist) * pull * step : 0);
+      item.vx *= Math.exp(-3.5 * step);
+      item.vz *= Math.exp(-3.5 * step);
+      item.x += item.vx * step;
+      item.z += item.vz * step;
+      const floor = restingY(this.world.terrain, item.kind, item.x, item.z, item.footprint);
+      item.vy = (item.vy ?? 0) - 4.5 * step;
+      item.y += item.vy * step;
+      if (item.y < floor) {
+        item.y = floor;
+        item.vy = 0;
+      }
+    }
   }
 }

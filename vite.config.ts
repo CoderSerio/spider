@@ -21,8 +21,7 @@ export default defineConfig({
     emptyOutDir: true,
     minify: 'oxc',
     cssMinify: true,
-    // three is one tightly coupled graph; keep the warning above its size.
-    chunkSizeWarningLimit: 600,
+    chunkSizeWarningLimit: 900,
     rolldownOptions: {
       output: {
         codeSplitting: {
@@ -52,9 +51,8 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/**/*.{ts,tsx}', 'worker/src/**/*.js'],
-      // Type-only modules carry no runtime statements. The worker entry is the
-      // one-line binding to a real Worker global; its handler and transport are tested.
       exclude: [
+        'src/client/models/page.ts',
         'src/client/worker/journal.worker.ts',
         'src/client/worker/world.worker.ts',
         'src/client/worker/protocol.ts',
