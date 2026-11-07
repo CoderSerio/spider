@@ -242,14 +242,24 @@ describe('GitHub badge', () => {
     expect(badge.getAttribute('target')).toBe('_blank');
     expect(badge.getAttribute('rel')).toBe('noopener noreferrer');
     expect(badge.getAttribute('aria-label')).toContain('Star');
-    expect(badge.querySelectorAll('svg')).toHaveLength(2);
+    expect(badge.querySelectorAll('svg')).toHaveLength(1);
+    expect(Array.from(document.querySelector('#corner')!.children).map((node) => node.id)).toEqual([
+      'observe-open',
+      'github',
+      'settings-open',
+    ]);
     expect(badge.querySelector('#github-stars-count')!.textContent).toBe('6');
+    for (const control of document.querySelector('#corner')!.children) {
+      expect((control as HTMLElement).style.height).toBe('32px');
+      expect((control as HTMLElement).style.boxSizing).toBe('border-box');
+      expect((control as HTMLElement).style.alignItems).toBe('center');
+    }
   });
 
   it('inverts on hover and outlines on focus', () => {
     installChrome();
     const badge = document.querySelector<HTMLAnchorElement>('#github')!;
-    const star = badge.querySelectorAll('svg')[1] as SVGElement;
+    const star = badge.querySelector('svg') as SVGElement;
     expect(badge.style.background).toBe('var(--ui-paper)');
 
     badge.dispatchEvent(new MouseEvent('mouseenter'));
