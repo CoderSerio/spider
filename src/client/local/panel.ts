@@ -7,21 +7,43 @@ export function bindLocalPanel(doc: Document): (local: boolean) => void {
   const unload = doc.querySelector<HTMLButtonElement>('#local-unload')!;
   const status = doc.querySelector<HTMLElement>('#local-status')!;
   const offline = doc.querySelector<HTMLElement>('#offline-status')!;
-  const report = async (): Promise<void> => {
-    status.textContent = (await (await localBackend()).localStatus()).text;
+  const progress = doc.querySelector<HTMLProgressElement>('#local-progress')!;
+  const detail = doc.querySelector<HTMLElement>('#local-progress-detail')!;
+  let statusVersion = 0;
+  const report = async (version: number): Promise<void> => {
+    const next = await (await localBackend()).localStatus();
+    if (version !== statusVersion) return;
+    status.textContent = next.text;
+    detail.textContent = next.detail ?? '';
+    if (next.progress === undefined) progress.removeAttribute('value');
+    else {
+      progress.value = next.progress;
+      status.textContent += ` · ${Math.round(next.progress * 100)}%`;
+    }
+  };
+  const fail = (text: string): void => {
+    ++statusVersion;
+    status.textContent = text;
+    progress.hidden = true;
+    detail.textContent = '';
   };
   let loadAttempt = 0;
   load.addEventListener('click', () => {
     const attempt = ++loadAttempt;
+    const version = ++statusVersion;
     load.disabled = true;
     unload.disabled = true;
     status.textContent = '正在加载；优先使用缓存，缺失文件才会下载…';
+    load.textContent = '正在加载…';
+    progress.hidden = false;
+    progress.removeAttribute('value');
+    detail.textContent = '首次下载需要一些时间，请保持页面打开。';
     const timer = setInterval(() => {
-      void report().catch(() => undefined);
+      void report(version).catch(() => undefined);
     }, 500);
     void (async () => {
       if (!('gpu' in navigator))
-        throw new Error('需要支持 WebGPU 的浏览器，请使用新版桌面 Chrome 或 Edge');
+        throw new Error('当前浏览器不支持本机模型，请更换支持图形加速的桌面浏览器');
       offline.textContent = '正在准备网页离线缓存…';
       void prepareOffline().then(
         () => {
@@ -36,28 +58,37 @@ export function bindLocalPanel(doc: Document): (local: boolean) => void {
         },
       );
       await (await localBackend()).localLoad();
-      await report();
+      await report(++statusVersion);
     })()
       .catch((error: unknown) => {
-        status.textContent = String(error);
+        fail(
+          error instanceof Error && /^[\u4e00-\u9fff]/u.test(error.message)
+            ? error.message
+            : '模型加载失败，请检查网络、存储空间和浏览器支持后重试',
+        );
       })
       .finally(() => {
         clearInterval(timer);
         load.disabled = false;
+        load.textContent = '加载本机模型';
         unload.disabled = false;
       });
   });
   unload.addEventListener('click', () => {
+    ++statusVersion;
     unload.disabled = true;
+    load.disabled = true;
     void (async () => {
       await (await localBackend()).localUnload();
-      await report();
+      await report(++statusVersion);
+      progress.hidden = true;
     })()
-      .catch((error: unknown) => {
-        status.textContent = String(error);
+      .catch(() => {
+        fail('释放缓存失败，请稍后重试；仍无法释放时可关闭此页面');
       })
       .finally(() => {
         unload.disabled = false;
+        load.disabled = false;
       });
   });
   return (local) => {

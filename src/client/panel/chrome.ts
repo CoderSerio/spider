@@ -8,6 +8,7 @@ import { dressChrome, paintTrace } from '../../ui/dress.js';
 import { bindFocus, paint } from '../../ui/style.js';
 import { border, color, font } from '../../ui/token.js';
 import { switchField } from '../../ui/switch/index.js';
+import { localModelPanel } from '../local/view.js';
 import { QUICK_PROVIDERS } from '../providers.js';
 import { REPO, REPO_STARS } from '../stars.js';
 
@@ -225,19 +226,7 @@ export function buildChrome(doc: Document): DocumentFragment {
     eyebrow(doc, '设置 / 模型'),
     pageTitle(doc, '模型'),
     switchField(doc, { name: 'localModel', label: '本机模型（实验性，可离线）' }),
-    h(
-      doc,
-      'div',
-      { id: 'local-model-panel', hidden: true },
-      note(
-        doc,
-        'Qwen3 0.6B · 首次联网下载数百 MB，之后优先使用浏览器缓存。刷新后需重新加载到显存，约占 1.4 GB。需要支持 WebGPU 的桌面浏览器。支持观察、走路、转向、升降身体；复杂指令可能失败。每条指令独立执行，最多尝试 6 步。',
-      ),
-      button(doc, '加载本机模型', { id: 'local-load', type: 'button' }),
-      button(doc, '释放显存', { id: 'local-unload', type: 'button' }),
-      h(doc, 'p', { id: 'local-status', role: 'status' }, '尚未加载本机模型'),
-      h(doc, 'p', { id: 'offline-status', role: 'status' }),
-    ),
+    localModelPanel(doc),
     h(
       doc,
       'div',

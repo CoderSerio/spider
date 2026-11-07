@@ -11,6 +11,8 @@ export interface LocalReply {
 export interface LocalStatus {
   ready: boolean;
   text: string;
+  progress?: number;
+  detail?: string;
 }
 export interface LocalBackend {
   localLoad(): Promise<void>;

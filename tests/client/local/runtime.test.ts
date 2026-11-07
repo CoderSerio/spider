@@ -8,9 +8,19 @@ const mock = vi.hoisted(() => ({
 }));
 vi.mock('@mlc-ai/web-llm', () => ({
   MLCEngine: class {
-    constructor(options: { initProgressCallback: (report: { text: string }) => void }) {
+    constructor(options: {
+      initProgressCallback: (report: {
+        text: string;
+        progress: number;
+        timeElapsed: number;
+      }) => void;
+    }) {
       mock.construct(options);
-      options.initProgressCallback({ text: 'download 50%' });
+      options.initProgressCallback({
+        text: 'Fetching param cache[3/9]: 50% completed',
+        progress: 0.5,
+        timeElapsed: 10,
+      });
     }
     reload = mock.reload;
     unload = mock.unload;
@@ -54,13 +64,18 @@ it('reports progress and can retry after a failed download', async () => {
   );
   const loading = runtime.localLoad();
   await vi.waitFor(() => expect(finish).toBeDefined());
-  expect(await runtime.localStatus()).toEqual({ ready: false, text: 'download 50%' });
+  expect(await runtime.localStatus()).toEqual({
+    ready: false,
+    text: '正在下载模型',
+    progress: 0.5,
+    detail: '本阶段已用 10 秒，预计还需约 10 秒（按当前速度估算）',
+  });
   finish();
   await loading;
   await runtime.localUnload();
   mock.reload.mockRejectedValueOnce(new Error('network'));
   await expect(runtime.localLoad()).rejects.toThrow('network');
-  expect((await runtime.localStatus()).text).toContain('network');
+  expect((await runtime.localStatus()).text).toContain('加载失败');
   await runtime.localLoad();
   expect((await runtime.localStatus()).ready).toBe(true);
 });
@@ -114,7 +129,7 @@ it('preserves the load error even if cleanup fails and permits retry', async () 
   await expect(runtime.localLoad()).rejects.toBe(original);
   expect(await runtime.localStatus()).toEqual({
     ready: false,
-    text: '加载失败：Error: download failed',
+    text: '加载失败，请检查网络、存储空间和浏览器支持后重试',
   });
   await runtime.localLoad();
   expect((await runtime.localStatus()).ready).toBe(true);

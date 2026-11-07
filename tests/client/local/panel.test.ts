@@ -25,6 +25,7 @@ beforeEach(() => {
   mock.status.mockResolvedValue({ text: 'ready', ready: true });
 });
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
@@ -56,28 +57,68 @@ it('shows progress during loading and leaves retry available after failure', asy
         reject = fail;
       }),
   );
+  mock.status.mockResolvedValueOnce({
+    ready: false,
+    text: '正在下载模型',
+    progress: 0.29,
+    detail: '预计还需约 22 秒',
+  });
   bindLocalPanel(document)(true);
   button('#local-load').click();
+  const progress = document.querySelector<HTMLProgressElement>('#local-progress')!;
+  expect(progress.hidden).toBe(false);
+  expect(progress.hasAttribute('value')).toBe(false);
   await vi.advanceTimersByTimeAsync(500);
-  expect(status()).toBe('ready');
+  expect(status()).toBe('正在下载模型 · 29%');
+  expect(progress.value).toBe(0.29);
+  expect(document.querySelector('#local-progress-detail')!.textContent).toContain('22 秒');
   expect(document.querySelector('#offline-status')!.textContent).toContain('网页已缓存');
   mock.status.mockRejectedValueOnce(new Error('closed'));
   await vi.advanceTimersByTimeAsync(500);
   reject(new Error('download failed'));
   await vi.advanceTimersByTimeAsync(0);
-  expect(status()).toContain('download failed');
+  expect(status()).toContain('模型加载失败');
   expect(button('#local-load').disabled).toBe(false);
+  expect(progress.hidden).toBe(true);
   mock.unload.mockRejectedValueOnce(new Error('unload failed'));
   button('#local-unload').click();
   await vi.advanceTimersByTimeAsync(0);
-  expect(status()).toContain('unload failed');
+  expect(status()).toContain('释放缓存失败');
   expect(button('#local-unload').disabled).toBe(false);
+});
+
+it('ignores late polling responses after loading completes', async () => {
+  vi.useFakeTimers();
+  let finish!: () => void;
+  let reply!: (value: unknown) => void;
+  mock.load.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  mock.status.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        reply = resolve;
+      }),
+  );
+  bindLocalPanel(document)(true);
+  button('#local-load').click();
+  await vi.advanceTimersByTimeAsync(500);
+  mock.status.mockResolvedValue({ ready: true, text: '本机模型已就绪', progress: 1 });
+  finish();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(status()).toBe('本机模型已就绪 · 100%');
+  reply({ ready: false, text: '正在下载模型', progress: 0.1 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(status()).toBe('本机模型已就绪 · 100%');
 });
 it('explains missing WebGPU before downloading anything', async () => {
   vi.stubGlobal('navigator', {});
   bindLocalPanel(document)(true);
   button('#local-load').click();
-  await vi.waitFor(() => expect(status()).toContain('WebGPU'));
+  await vi.waitFor(() => expect(status()).toContain('浏览器不支持'));
   expect(mock.load).not.toHaveBeenCalled();
   expect(mock.offline).not.toHaveBeenCalled();
 });

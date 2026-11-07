@@ -1,5 +1,6 @@
 import type { MLCEngine } from '@mlc-ai/web-llm';
 import { LOCAL_APP_CONFIG } from './model.js';
+import { localProgress } from './progress.js';
 import { LOCAL_MODEL, type LocalBackend, type LocalStatus } from './types.js';
 
 /** One engine in the journal worker, shared by actions and diary summaries. */
@@ -30,15 +31,15 @@ export function createLocalRuntime(): LocalBackend {
           next = new MLCEngine({
             appConfig: LOCAL_APP_CONFIG,
             initProgressCallback: (report) => {
-              status = { ready: false, text: report.text };
+              status = localProgress(report);
             },
           });
           await next.reload(LOCAL_MODEL, { context_window_size: 4096 });
           engine = next;
-          status = { ready: true, text: '本机模型已就绪' };
+          status = { ready: true, text: '本机模型已就绪', progress: 1 };
         } catch (error) {
           await next?.unload().catch(() => undefined);
-          status = { ready: false, text: `加载失败：${String(error)}` };
+          status = { ready: false, text: '加载失败，请检查网络、存储空间和浏览器支持后重试' };
           throw error;
         }
       }),
@@ -87,7 +88,7 @@ export function createLocalRuntime(): LocalBackend {
       serial(async () => {
         await engine?.unload();
         engine = null;
-        status = { ready: false, text: '已释放模型显存，下载缓存仍保留' };
+        status = { ready: false, text: '已释放运行时缓存，已下载的模型仍保留' };
       }),
   };
 }
