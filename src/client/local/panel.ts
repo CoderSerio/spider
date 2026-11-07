@@ -1,7 +1,10 @@
 import { localBackend } from './backend.js';
 import { prepareOffline } from './offline.js';
 
-export function bindLocalPanel(doc: Document): (local: boolean) => void {
+export function bindLocalPanel(
+  doc: Document,
+  onReady?: (ready: boolean) => void,
+): (local: boolean) => void {
   const panel = doc.querySelector<HTMLElement>('#local-model-panel')!;
   const load = doc.querySelector<HTMLButtonElement>('#local-load')!;
   const unload = doc.querySelector<HTMLButtonElement>('#local-unload')!;
@@ -13,6 +16,7 @@ export function bindLocalPanel(doc: Document): (local: boolean) => void {
   const report = async (version: number): Promise<void> => {
     const next = await (await localBackend()).localStatus();
     if (version !== statusVersion) return;
+    onReady?.(next.ready);
     status.textContent = next.text;
     detail.textContent = next.detail ?? '';
     if (next.progress === undefined) progress.removeAttribute('value');
@@ -23,6 +27,7 @@ export function bindLocalPanel(doc: Document): (local: boolean) => void {
   };
   const fail = (text: string): void => {
     ++statusVersion;
+    onReady?.(false);
     status.textContent = text;
     progress.hidden = true;
     detail.textContent = '';
@@ -31,6 +36,7 @@ export function bindLocalPanel(doc: Document): (local: boolean) => void {
   load.addEventListener('click', () => {
     const attempt = ++loadAttempt;
     const version = ++statusVersion;
+    onReady?.(false);
     load.disabled = true;
     unload.disabled = true;
     status.textContent = '正在加载；优先使用缓存，缺失文件才会下载…';
@@ -76,6 +82,7 @@ export function bindLocalPanel(doc: Document): (local: boolean) => void {
   });
   unload.addEventListener('click', () => {
     ++statusVersion;
+    onReady?.(false);
     unload.disabled = true;
     load.disabled = true;
     void (async () => {

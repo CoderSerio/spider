@@ -132,12 +132,18 @@ export function mountPanel(
     touched = true;
   });
 
+  let localReady = false;
   const paint = (): void => {
     const settings = readPilot();
-    const ready = pilotReady(settings);
-    model.textContent = ready ? (settings.mode === 'local' ? 'Qwen3 · 本机' : settings.model) : '';
+    const local = settings.mode === 'local';
+    const ready = local ? localReady : pilotReady(settings);
+    model.textContent = ready ? (local ? '通义千问 · 本机' : settings.model) : '';
     model.style.display = ready ? '' : 'none';
-    goal.placeholder = ready ? '让它去做一件事' : '未填写模型';
+    goal.placeholder = ready
+      ? '让它去做一件事'
+      : local
+        ? '本机模型未就绪，发送后打开加载面板'
+        : '未填写模型';
   };
 
   const touch = (): void => {
@@ -183,7 +189,10 @@ export function mountPanel(
     stage.voice();
   };
 
-  const localPanel = bindLocalPanel(doc);
+  const localPanel = bindLocalPanel(doc, (ready) => {
+    localReady = ready;
+    paint();
+  });
 
   const field = (name: string): HTMLInputElement => {
     const element = settingsForm.elements.namedItem(name);
@@ -603,6 +612,11 @@ export function mountPanel(
       return;
     }
     const settings = readPilot();
+    if (settings.mode === 'local' && !localReady) {
+      fill(settings);
+      showPage('model');
+      return;
+    }
     if (!pilotReady(settings)) {
       show('还没有填写模型', 'note');
       fill(settings);
@@ -665,4 +679,8 @@ export function mountPanel(
   });
 
   paint();
+  if (readPilot().mode === 'local') {
+    fill(readPilot());
+    showPage('model');
+  }
 }
