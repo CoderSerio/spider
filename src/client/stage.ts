@@ -1,11 +1,16 @@
 import {
   Group,
+  BufferGeometry,
+  AdditiveBlending,
+  CatmullRomCurve3,
+  Mesh,
+  MeshBasicMaterial,
+  TubeGeometry,
   MathUtils,
   PerspectiveCamera,
   PCFShadowMap,
   Scene,
   Vector3,
-  type BufferGeometry,
   type Object3D,
 } from 'three';
 import { WebGPURenderer } from 'three/webgpu';
@@ -25,6 +30,7 @@ import { ObserveOverlay } from './observeView.js';
 import { buildProp, drapeGrass } from './props.js';
 import { createSound } from './sound.js';
 
+// Camera framing. Drag orbits, wheel dollies; both clamp at the same limits.
 const VIEW = {
   fov: 32,
   near: 0.08,
@@ -48,6 +54,7 @@ const look = new Vector3();
 const desired = new Vector3();
 const bubbleAt = new Vector3();
 
+/** Renderer and camera. It steps the one spider, then paints that same spider. */
 export class Stage {
   readonly #fps: FpsDisplay;
   readonly #host: HTMLElement;
@@ -57,9 +64,11 @@ export class Stage {
   readonly #spider: Spider;
   readonly #props = new Map<string, Group>();
   #island: Group | null = null;
+  /** While set, a restored seed waits for the world worker instead of meshing here. */
   #islandPending = false;
   #islandRequest = 0;
   #islandSource: ((seed: number) => Promise<Group>) | null = null;
+  /** Last drawn action stage, so a new bite can make a sound. */
   readonly #stages = new Map<string, number>();
   readonly #drapedGrass = new Map<
     string,
@@ -68,29 +77,46 @@ export class Stage {
   #resizeObserver!: ResizeObserver;
   #view = { left: 0, top: 0, width: 1, height: 1 };
   readonly #sound = createSound(window);
+  readonly #silk = new Mesh(
+    new TubeGeometry(new CatmullRomCurve3([new Vector3(), new Vector3()]), 8, 0.014, 6, false),
+    new MeshBasicMaterial({
+      color: 0xbffcff,
+      transparent: true,
+      opacity: 0.95,
+      blending: AdditiveBlending,
+      toneMapped: false,
+    }),
+  );
   #heard = false;
   readonly #wasLifted: boolean[] = [];
+  /** Ids on the back last frame. Null until the first sync, so birth is silent. */
   #carried: Set<string> | null = null;
+  /** Reused so an idle frame does not allocate a set of ids. */
   readonly #alive = new Set<string>();
   #halt: 'clear' | 'solid' | 'steep' = 'clear';
 
   #yaw: number = VIEW.yaw;
   #pitch: number = VIEW.pitch;
   #distance: number = VIEW.distance;
+  /** God view. Drag pans, the wheel changes height, and the sense overlay is on. */
   #overlook = false;
   readonly #observe: ObserveOverlay;
   readonly #focus = new Vector3();
   #dragging = false;
   #pointerX = 0;
   #pointerY = 0;
+  /** Advance the one simulation, then read its world for the props. */
   #step: ((dt: number) => void) | null = null;
+  /** Cloud hold freezes the spider. The picture keeps drawing. */
   #held = false;
   #world: (() => WorldState) | null = null;
+  /** Screen point just above the body, for the speech bubble. */
   #onAnchor: ((point: { x: number; y: number } | null) => void) | null = null;
   readonly #camPos = new Vector3();
   readonly #lookPos = new Vector3();
   #camReady = false;
   #last = performance.now();
+  /** Ecology follows local wall time and only needs a once-per-second update. */
   #ecologySecond = -1;
   readonly #sky = new EcologySky();
   readonly #lamp = new Headlamp();
@@ -100,6 +126,7 @@ export class Stage {
     this.#host = host;
     this.#spider = spider;
 
+    // WebGPURenderer defaults to a transparent canvas. The paper sky is opaque.
     this.#renderer = new WebGPURenderer({
       alpha: false,
       antialias: true,
@@ -107,6 +134,7 @@ export class Stage {
     });
     this.#renderer.shadowMap.enabled = true;
     this.#renderer.shadowMap.type = PCFShadowMap;
+    // Draw at the screen's own pixels, capped at 2, so the ink stays sharp.
     this.#renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     this.#renderer.setClearColor(PALETTE.paper, 1);
     host.appendChild(this.#renderer.domElement);
@@ -124,6 +152,7 @@ export class Stage {
       this.#sky.object,
       waterSplashes,
     );
+    this.#silk.visible = true;
 
     this.#lamp.attach(this.#spider);
 
@@ -131,19 +160,23 @@ export class Stage {
     this.#resize();
   }
 
+  /** The render loop steps this once, then draws the same spider. */
   bind(step: (dt: number) => void, world: () => WorldState): void {
     this.#step = step;
     this.#world = world;
   }
 
+  /** Freeze the simulation while another computer holds the spider or a choice is open. */
   hold(on: boolean): void {
     this.#held = on;
   }
 
+  /** Called after each paint with a point above the spider, in page pixels. */
   follow(onAnchor: (point: { x: number; y: number } | null) => void): void {
     this.#onAnchor = onAnchor;
   }
 
+  /** Switch between the chase camera and the overhead observation view. */
   setOverlook(on: boolean): void {
     this.#overlook = on;
     if (on) {
@@ -160,6 +193,7 @@ export class Stage {
     this.#renderer.setAnimationLoop(this.#frame);
   }
 
+  /** Use an island the world worker already built. */
   placeIsland(group: Group): void {
     this.#dropIsland();
     enableWorldShadows(group);
@@ -168,10 +202,12 @@ export class Stage {
     this.#scene.add(group);
   }
 
+  /** A restored seed can be meshed off the page thread. */
   setIslandSource(source: (seed: number) => Promise<Group>): void {
     this.#islandSource = source;
   }
 
+  /** The ground mesh is baked once. A restored seed needs a new island. */
   retile(): void {
     const seed = this.#world?.().seed;
     if (this.#islandSource && seed != null) {
@@ -235,26 +271,60 @@ export class Stage {
 
     const back = this.#spider.root.position;
     const yaw = this.#spider.yaw;
-    const fx = -Math.sin(yaw);
-    const fz = -Math.cos(yaw);
-    const rows = held.length > 3 ? 2 : 1;
-    const cols = Math.ceil(held.length / rows);
-    const rightX = -fz;
-    const rightZ = fx;
-    for (let index = 0; index < held.length; index++) {
-      const item = held[index];
+    // carrying 中的苹果使用自己的物理坐标；蜘蛛只通过蛛丝施加拉力。
+    for (const item of held) {
       alive.add(item.id);
-      const row = index % rows;
-      const col = Math.floor(index / rows);
-      const along = (col - (cols - 1) / 2) * 0.42;
-      const lateral = rows === 1 ? 0 : row === 0 ? -0.24 : 0.24;
-      this.#syncProp(
-        item,
-        back.x - fx * along + rightX * lateral,
-        back.y + 0.95,
-        back.z - fz * along + rightZ * lateral,
-        world,
+      this.#syncProp(item, item.x, item.y, item.z, world);
+    }
+
+    const interaction = this.#spider.interaction;
+    const target = held[0] ?? (interaction?.phase === 'drag' ? interaction.target : null);
+    if (target) {
+      if (!this.#silk.parent) {
+        this.#scene.add(this.#silk);
+      }
+      // spinneret 在腹部最后端，丝线从身体后方出发，而不是从肚子底部垂下。
+      // 腹部轮廓的最后尖端约在身体后方 1.7 个单位、甲壳高度附近。
+      // 端点略微嵌入模型，避免出现一小段悬空。
+      const abdomen = new Vector3(
+        back.x + Math.sin(yaw) * 1.62,
+        back.y + 0.82,
+        back.z + Math.cos(yaw) * 1.62,
       );
+      const toSpiderX = back.x - target.x;
+      const toSpiderZ = back.z - target.z;
+      const toSpiderLength = Math.hypot(toSpiderX, toSpiderZ) || 1;
+      const appleRadius = 0.32;
+      const silkEnd = new Vector3(
+        target.x + (toSpiderX / toSpiderLength) * appleRadius,
+        target.y + 0.34,
+        target.z + (toSpiderZ / toSpiderLength) * appleRadius,
+      );
+      const points = [abdomen];
+      for (let i = 1; i < 10; i++) {
+        const t = i / 10;
+        points.push(
+          new Vector3(
+            abdomen.x + (silkEnd.x - abdomen.x) * t,
+            abdomen.y + (silkEnd.y - abdomen.y) * t - Math.sin(Math.PI * t) * 0.18,
+            abdomen.z + (silkEnd.z - abdomen.z) * t,
+          ),
+        );
+      }
+      points.push(silkEnd);
+      this.#silk.geometry.dispose();
+      this.#silk.geometry = new TubeGeometry(
+        new CatmullRomCurve3(points),
+        Math.max(8, points.length * 2),
+        0.014,
+        6,
+        false,
+      );
+      this.#silk.visible = true;
+    } else {
+      if (this.#silk.parent) {
+        this.#scene.remove(this.#silk);
+      }
     }
 
     for (const [id, prop] of this.#props) {
@@ -268,6 +338,7 @@ export class Stage {
     }
   }
 
+  /** Draw one entity, rebuilding it only when its bite stage changes. */
   #syncProp(entity: EntityState, x: number, y: number, z: number, world: WorldState): void {
     const previous = this.#stages.get(entity.id);
     let prop = this.#props.get(entity.id);
@@ -285,6 +356,8 @@ export class Stage {
       const built = buildProp(entity.kind, entity.stage, entity.footprint, entity.id);
       if (!built) return;
       if (roll > 0) {
+        // The mesh origin is its bottom. Spin around the center, so the
+        // contact point stays on the ground while the body turns.
         const pivot = new Group();
         built.position.y = -roll;
         pivot.add(built);
@@ -314,6 +387,7 @@ export class Stage {
     }
   }
 
+  /** A quiet tick for words appearing beside the spider. */
   voice(): void {
     this.#sound.voice();
   }
@@ -364,6 +438,8 @@ export class Stage {
     this.#pointerX = event.clientX;
     this.#pointerY = event.clientY;
     if (this.#overlook) {
+      // 像拖地图一样：内容跟着指针走，镜头就朝反方向平移。
+      // 横竖都按同一个方向约定，斜着拖才不会一边跟手一边反着跑。
       const span = this.#distance * 0.0015;
       this.#focus.x = MathUtils.clamp(this.#focus.x - dx * span, -WORLD_RADIUS, WORLD_RADIUS);
       this.#focus.z = MathUtils.clamp(this.#focus.z - dy * span, -WORLD_RADIUS, WORLD_RADIUS);
@@ -380,6 +456,8 @@ export class Stage {
     event.preventDefault();
   };
 
+  // Orbit angles are an offset in the character frame, then applied with the
+  // same quaternion the body moves with. They are not a second heading.
   #placeCamera(dt: number): void {
     if (this.#overlook) {
       const world = this.#world?.();
@@ -388,6 +466,8 @@ export class Stage {
       const back = sky * 0.18;
       desired.set(this.#focus.x, ground + sky, this.#focus.z + back);
       look.set(this.#focus.x, ground, this.#focus.z);
+      // 三维地面有起伏：山脊挡在焦点和机位之间时，把机位抬到山脊上方，
+      // 而不是让俯视镜头穿进山体里。
       if (world) {
         for (let k = 1; k <= 8; k++) {
           const t = k / 8;
@@ -408,6 +488,7 @@ export class Stage {
       desired.copy(this.#spider.root.position).add(local);
       look.copy(this.#spider.root.position);
       look.y += VIEW.lookUp;
+      // 地形有起伏，镜头不能钻进山腹；沿视线把机位抬到山脊之上。
       const world = this.#world?.();
       if (world) {
         for (let k = 1; k <= 6; k++) {
@@ -425,6 +506,8 @@ export class Stage {
       this.#lookPos.copy(look);
       this.#camReady = true;
     } else {
+      // Position and look target ease together. Entering the overlook then
+      // turns and pulls back in one motion instead of snapping the heading.
       const blend = 1 - Math.exp(-VIEW.ease * Math.max(dt, 0.001));
       this.#camPos.lerp(desired, blend);
       this.#lookPos.lerp(look, blend);
@@ -482,6 +565,7 @@ export class Stage {
     this.#clock = applyEcologyLighting(this.#renderer, new Date(epochSecond * 1000));
   }
 
+  /** One tick when any foot lands, and one when an apple disappears. */
   #feedback(): void {
     const legs = this.#spider.legs;
     if (!this.#heard) {
@@ -501,6 +585,7 @@ export class Stage {
     this.#halt = halt;
   }
 
+  /** A point above the shell, or null when it is behind the camera. */
   #aboveSpider(): { x: number; y: number } | null {
     bubbleAt.copy(this.#spider.root.position);
     bubbleAt.y += 1.45;
@@ -514,6 +599,7 @@ export class Stage {
   }
 }
 
+/** Release geometry owned by a scene subtree. Pooled splash geometry is kept. */
 function disposeGeometries(root: Object3D): void {
   const geometries = new Set<BufferGeometry>();
   root.traverse((node) => {
