@@ -49,7 +49,7 @@ export function bindLocalPanel(
     }, 500);
     void (async () => {
       if (!('gpu' in navigator))
-        throw new Error('当前浏览器不支持本机模型，请更换支持图形加速的桌面浏览器');
+        throw new Error('当前浏览器不支持 WebGPU，请使用支持 WebGPU 的桌面浏览器');
       offline.textContent = '正在准备网页离线缓存…';
       void prepareOffline().then(
         () => {
